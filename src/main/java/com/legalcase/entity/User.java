@@ -2,6 +2,8 @@ package com.legalcase.entity;
 
 import com.legalcase.enums.Role;
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -30,6 +32,10 @@ public class User {
     private Long id;
 
     // ===== AUTHENTICATION FIELDS =====
+    @Column(nullable = false, unique = true)
+    @Size(min = 3, max = 20, message = "Username must be between 3 and 20 characters")
+    @Pattern(regexp = "^[a-zA-Z0-9._-]+$", message = "Username can only contain letters, numbers, dots, underscores, and hyphens")
+    private String username;
 
     @Column(nullable = false, unique = true, length = 100)
     private String email;
@@ -88,3 +94,4 @@ public class User {
         return this.role == Role.STAFF;
     }
 }
+

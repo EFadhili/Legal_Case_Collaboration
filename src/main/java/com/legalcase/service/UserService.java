@@ -5,7 +5,6 @@ import com.legalcase.enums.Role;
 import com.legalcase.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,25 +27,31 @@ public class UserService {
 
     /**
      * Register a new user in the system.
-     *
+     * <p>
      * Business rules:
      * 1. Email must be unique (no existing user with same email)
      * 2. Password must be encoded before storing
      * 3. New users are active by default
      * 4. Default role is STAFF unless specified otherwise
      *
-     * @param email User's email address (used for login)
+     * @param email    User's email address (used for login)
      * @param password Raw password (will be encoded)
      * @param fullName User's full legal name
-     * @param role User's role (ADMIN, LAWYER, STAFF)
+     * @param role     User's role (ADMIN, LAWYER, STAFF)
      * @return The saved User entity
      * @throws RuntimeException if email already exists
      */
     @Transactional
-    public User registerUser(String email, String password, String fullName, Role role) {
-        log.info("Attempting to register user with email: {}", email);
+    public User registerUser(String username, String email, String password, String fullName, Role role) {
+        log.info("Attempting to register user with username: {}, email: {}", email);
 
         validatePasswordStrength(password);
+
+        // Check if username already exists
+        if (userRepository.existsByUsername(username)) {
+            log.error("Registration failed - username already exists: {}", username);
+            throw new RuntimeException("Username '" + username + "' is already taken. Please choose another.");
+        }
 
         // Business rule 1: Check if email already exists
         if (userRepository.existsByEmail(email)) {
@@ -56,6 +61,7 @@ public class UserService {
 
         // Business rule 2: Create new user entity
         User user = new User();
+        user.setUsername(username);      
         user.setEmail(email);
         user.setFullName(fullName);
         user.setRole(role != null ? role : Role.STAFF); // Default to STAFF
@@ -78,19 +84,19 @@ public class UserService {
      * Simple registration with default STAFF role.
      */
     @Transactional
-    public User registerStaff(String email, String password, String fullName) {
-        return registerUser(email, password, fullName, Role.STAFF);
+    public User registerStaff(String username, String email, String password, String fullName) {
+        return registerUser(username, email, password, fullName, Role.STAFF);
     }
 
     /**
      * Authenticate a user by email and password.
-     *
+     * <p>
      * Business rules:
      * 1. User must exist with given email
      * 2. Password must match the stored encoded password
      * 3. User must be active
      *
-     * @param email User's email
+     * @param email       User's email
      * @param rawPassword Plain text password to verify
      * @return The authenticated User
      * @throws RuntimeException if credentials are invalid or user is inactive
@@ -149,7 +155,30 @@ public class UserService {
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
     }
 
-    /**
+    // NEW: Find by username
+    public User findByUsername(String username) {
+        return userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("User not found with username: " + username));
+    }
+
+    // NEW: Search users for adding members (exact match on username, email, or full name)
+    public List<User> searchUsers(String searchTerm) {
+        if (searchTerm == null || searchTerm.trim().isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findByUsernameOrEmailOrFullName(searchTerm.trim());
+    }
+
+    // NEW: Partial search for autocomplete (for future UI)
+    public List<User> autocompleteUsers(String partial) {
+        if (partial == null || partial.trim().isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findByUsernameStartingWithOrFullNameStartingWith(partial.trim());
+    }
+
+
+            /**
      * Get all users with a specific role.
      *
      * @param role The role to filter by
@@ -186,7 +215,7 @@ public class UserService {
      * Deactivate a user account.
      * Only ADMIN users should be able to call this method.
      *
-     * @param userId ID of user to deactivate
+     * @param userId  ID of user to deactivate
      * @param adminId ID of admin performing the action (for audit)
      */
     @Transactional
@@ -239,7 +268,17 @@ public class UserService {
         return !userRepository.existsByEmail(email);
     }
 
-    /**
+    // NEW: Check if username is available
+    public boolean isUsernameAvailable(String username) {
+        return !userRepository.existsByUsername(username);
+    }
+
+
+
+
+
+
+      /**
      * Count total users in the system.
      */
     public long getTotalUserCount() {
@@ -290,3 +329,6 @@ public class UserService {
         }
     }
 }
+
+
+

@@ -30,6 +30,7 @@ public class AuthController {
 
         try {
             User savedUser = userService.registerUser(
+                    request.getUsername(),
                     request.getEmail(),
                     request.getPassword(),
                     request.getFullName(),
@@ -100,6 +101,15 @@ public class AuthController {
         }
     }
 
+
+    // NEW: Check username availability endpoint
+    @GetMapping("/check-username")
+    public ResponseEntity<Boolean> isUsernameAvailable(@RequestParam String username) {
+        boolean isAvailable = userService.isUsernameAvailable(username);
+        return ResponseEntity.ok(isAvailable);
+    }
+
+
     @GetMapping("/check-email")
     public ResponseEntity<Boolean> isEmailAvailable(@RequestParam String email) {
         boolean isAvailable = userService.isEmailAvailable(email);
@@ -128,3 +138,8 @@ public class AuthController {
         }
     }
 }
+
+
+
+
+

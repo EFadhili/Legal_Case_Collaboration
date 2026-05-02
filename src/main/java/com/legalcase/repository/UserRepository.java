@@ -32,6 +32,18 @@ public interface UserRepository extends JpaRepository<User, Long> {
      */
     boolean existsByEmail(String email);
 
+    // NEW: Username-based methods
+    Optional<User> findByUsername(String username);
+    boolean existsByUsername(String username);
+
+    // Search methods (for adding members to cases/tasks)
+    @Query("SELECT u FROM User u WHERE u.username = :searchTerm OR u.email = :searchTerm OR u.fullName = :searchTerm")
+    List<User> findByUsernameOrEmailOrFullName(@Param("searchTerm") String searchTerm);
+
+    // Partial search for autocomplete (future UI)
+    @Query("SELECT u FROM User u WHERE u.username LIKE CONCAT(:partial, '%') OR u.fullName LIKE CONCAT(:partial, '%')")
+    List<User> findByUsernameStartingWithOrFullNameStartingWith(@Param("partial") String partial);
+
     /**
      * Find all users with a specific role.
      * Spring generates: SELECT u FROM User u WHERE u.role = ?1
@@ -87,3 +99,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
      */
     void deleteByEmail(String email);
 }
+
+
+
+
