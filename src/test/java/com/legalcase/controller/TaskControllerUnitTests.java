@@ -321,4 +321,3 @@ class TaskControllerUnitTests {
         verify(taskService, times(1)).getUnblockedTasksByCase(1L);
     }
 }
-
