@@ -1,5 +1,6 @@
 package com.legalcase.service;
 
+import com.legalcase.repository.NotificationRepository;
 import com.legalcase.dto.response.MemberResponse;
 import com.legalcase.entity.CaseMember;
 import com.legalcase.entity.LegalCase;
@@ -30,6 +31,7 @@ public class CaseService {
     private final CaseRepository caseRepository;
     private final CaseMemberRepository caseMemberRepository;
     private final UserRepository userRepository;
+    private final NotificationService notificationService;
 
     @Transactional
     public LegalCase createCase(String title, String description, CaseType type,
@@ -279,6 +281,8 @@ public class CaseService {
         caseMember.setUser(user);
         caseMember.setRole(role);
 
+        notificationService.notifyUserAddedToCase(user.getId(), caseId, addedByUserId);
+
         log.info("User '{}' (ID: {}) added to case {} as {}", identifier, user.getId(), caseId, role);
 
         return caseMemberRepository.save(caseMember);
@@ -303,13 +307,8 @@ public class CaseService {
 
         for (String identifier : identifiers) {
             try {
-                Optional<User> userOpt = findUserByIdentifierOptional(identifier);
-                if (userOpt.isEmpty()) {
-                    notFoundUsers.add(identifier);
-                    continue;
-                }
-
-                User user = userOpt.get();
+                // Find user by identifier (username or email)
+                User user = findUserByIdentifier(identifier);  // This throws exception if not found
 
                 if (caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
                     alreadyMembers.add(identifier);
@@ -323,8 +322,16 @@ public class CaseService {
                 caseMember.setUser(user);
                 caseMember.setRole(role);
 
-                addedMembers.add(caseMemberRepository.save(caseMember));
+                CaseMember saved = caseMemberRepository.save(caseMember);
+                addedMembers.add(saved);
 
+                // Send notification
+                notificationService.notifyUserAddedToCase(user.getId(), caseId, addedByUserId);
+
+            } catch (RuntimeException e) {
+                // User not found
+                notFoundUsers.add(identifier);
+                log.error("Failed to add user {}: {}", identifier, e.getMessage());
             } catch (Exception e) {
                 log.error("Failed to add user {}: {}", identifier, e.getMessage());
             }

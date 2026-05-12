@@ -1,5 +1,6 @@
 package com.legalcase.service;
 
+import com.legalcase.repository.NotificationRepository;
 import com.legalcase.entity.LegalCase;
 import com.legalcase.entity.Task;
 import com.legalcase.entity.User;
@@ -28,6 +29,7 @@ public class TaskService {
     private final CaseRepository caseRepository;
     private final UserRepository userRepository;
     private final CaseMemberRepository caseMemberRepository;
+    private final NotificationService notificationService;
 
     @Transactional
     public Task createTask(String title, String description, TaskType type,
@@ -213,6 +215,8 @@ public class TaskService {
 
         task.setAssignedTo(assignedTo);
         taskRepository.save(task);
+
+        notificationService.notifyTaskAssigned(taskId, assignedToUserId, assignedByUserId);
         log.info("Task {} assigned to user {}", taskId, assignedToUserId);
 
         return findWithAllAssociations(taskId);

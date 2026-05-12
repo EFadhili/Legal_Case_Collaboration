@@ -34,6 +34,10 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
 
     List<Task> findByDueDateAfter(LocalDate date);
 
+    // Find tasks by due date (exact match)
+    List<Task> findByDueDate(LocalDate dueDate);
+
+
     // Composite queries
     List<Task> findByLegalCaseAndStatus(LegalCase legalCase, TaskStatus status);
 
