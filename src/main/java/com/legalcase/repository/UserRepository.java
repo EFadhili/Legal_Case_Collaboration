@@ -41,9 +41,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByUsernameOrEmailOrFullName(@Param("searchTerm") String searchTerm);
 
     // Partial search for autocomplete (future UI)
-    @Query("SELECT u FROM User u WHERE u.username LIKE CONCAT(:partial, '%') OR u.fullName LIKE CONCAT(:partial, '%')")
-    List<User> findByUsernameStartingWithOrFullNameStartingWith(@Param("partial") String partial);
-
+    @Query("""
+SELECT u FROM User u
+WHERE LOWER(u.username) LIKE LOWER(CONCAT('%', :partial, '%'))
+   OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :partial, '%'))
+   OR LOWER(u.email) LIKE LOWER(CONCAT('%', :partial, '%'))
+""")
+    List<User> findByUsernameStartingWithOrFullNameStartingWith(
+            @Param("partial") String partial
+    );
     /**
      * Find all users with a specific role.
      * Spring generates: SELECT u FROM User u WHERE u.role = ?1

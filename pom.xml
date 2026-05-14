@@ -111,6 +111,13 @@
             <artifactId>spring-boot-starter-reactor-netty</artifactId>
         </dependency>
 
+        <!-- H2 Database for Testing (in-memory database) -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- AWS S3 SDK -->
         <dependency>
             <groupId>com.amazonaws</groupId>
@@ -122,6 +129,27 @@
         <dependency>
             <groupId>com.amazonaws</groupId>
             <artifactId>aws-java-sdk-core</artifactId>
+            <version>1.12.600</version>
+        </dependency>
+
+        <!-- PDF Processing -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.2</version>
+        </dependency>
+
+        <!-- Excel/Word Processing -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.2.5</version>
+        </dependency>
+
+        <!-- AWS S3 (for future integration) -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-s3</artifactId>
             <version>1.12.600</version>
         </dependency>
 
