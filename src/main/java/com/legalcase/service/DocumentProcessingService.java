@@ -48,34 +48,11 @@ public class DocumentProcessingService {
                         LocalDateTime.now()
                 );
 
-                // Process with timeout
-                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                    processDocument(document);
-                });
-
-                future.get(maxProcessingSeconds, TimeUnit.SECONDS);
+                // Call process document directly (NOT in a separate CompletableFuture)
+                processDocument(document);
 
                 log.info("Text extraction completed for document: {}", document.getId());
                 return CompletableFuture.completedFuture(null);
-
-            } catch (TimeoutException e) {
-                retryCount++;
-                log.warn("Extraction timeout for document {} (attempt {}/{}): {}",
-                        document.getId(), retryCount, maxRetries, e.getMessage());
-
-                documentRepository.updateExtractionStatus(
-                        document.getId(),
-                        TextExtractionStatus.PENDING,
-                        retryCount * 25,
-                        null
-                );
-
-                if (retryCount >= maxRetries) {
-                    documentRepository.markExtractionFailed(
-                            document.getId(),
-                            "Extraction timed out after " + maxProcessingSeconds + " seconds"
-                    );
-                }
 
             } catch (Exception e) {
                 retryCount++;
@@ -94,7 +71,8 @@ public class DocumentProcessingService {
         return CompletableFuture.completedFuture(null);
     }
 
-    private void processDocument(Document document) {
+    @Transactional  // Keep this
+    protected void processDocument(Document document) {
         try {
             // Update progress to 25%
             documentRepository.updateExtractionStatus(
@@ -136,9 +114,10 @@ public class DocumentProcessingService {
     }
 
     private String extractTextFromS3(Document document) throws Exception {
-        // Download from S3
         try (InputStream inputStream = fileUtils.downloadFromS3(document.getStoragePath())) {
             return fileUtils.extractTextFromFile(inputStream, document.getFileExtension());
         }
     }
 }
+
+

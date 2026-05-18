@@ -17,32 +17,47 @@ import java.util.List;
 @Repository
 public interface NotificationRepository extends JpaRepository<Notification, Long> {
 
-    // Get all notifications for a user (paginated)
+    // ===== EXISTING METHODS =====
+
     Page<Notification> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
 
-    // Get unread notifications for a user
     List<Notification> findByUserIdAndStatusOrderByCreatedAtDesc(Long userId, NotificationStatus status);
 
-    // Count unread notifications for a user
     long countByUserIdAndStatus(Long userId, NotificationStatus status);
 
-    // Get notifications by type
     List<Notification> findByUserIdAndType(Long userId, NotificationType type);
 
-    // Mark notifications as read
     @Modifying
     @Query("UPDATE Notification n SET n.status = 'READ', n.readAt = :readAt WHERE n.id IN :notificationIds AND n.user.id = :userId")
     int markAsRead(@Param("notificationIds") List<Long> notificationIds,
                    @Param("userId") Long userId,
                    @Param("readAt") LocalDateTime readAt);
 
-    // Mark all notifications as read for a user
     @Modifying
     @Query("UPDATE Notification n SET n.status = 'READ', n.readAt = :readAt WHERE n.user.id = :userId AND n.status = 'UNREAD'")
     int markAllAsRead(@Param("userId") Long userId, @Param("readAt") LocalDateTime readAt);
 
-    // Delete old notifications (older than days)
     @Modifying
     @Query("DELETE FROM Notification n WHERE n.createdAt < :cutoffDate AND n.status = 'READ'")
     int deleteOldReadNotifications(@Param("cutoffDate") LocalDateTime cutoffDate);
+
+    // ===== NEW JOIN FETCH METHODS (Prevent LazyInitializationException) =====
+
+    /**
+     * Get paginated notifications for a user with all associations initialized
+     */
+    @Query("SELECT DISTINCT n FROM Notification n " +
+            "LEFT JOIN FETCH n.user " +
+            "WHERE n.user.id = :userId " +
+            "ORDER BY n.createdAt DESC")
+    Page<Notification> findByUserIdWithDetails(@Param("userId") Long userId, Pageable pageable);
+
+    /**
+     * Get unread notifications for a user with associations initialized
+     */
+    @Query("SELECT DISTINCT n FROM Notification n " +
+            "LEFT JOIN FETCH n.user " +
+            "WHERE n.user.id = :userId AND n.status = 'UNREAD' " +
+            "ORDER BY n.createdAt DESC")
+    List<Notification> findUnreadByUserIdWithDetails(@Param("userId") Long userId);
 }

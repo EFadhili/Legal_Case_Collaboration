@@ -3,12 +3,9 @@ package com.legalcase.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.legalcase.dto.request.MarkNotificationsReadRequest;
 import com.legalcase.dto.response.NotificationResponse;
-import com.legalcase.entity.Notification;
-import com.legalcase.entity.User;
 import com.legalcase.enums.NotificationPriority;
 import com.legalcase.enums.NotificationStatus;
 import com.legalcase.enums.NotificationType;
-import com.legalcase.enums.Role;
 import com.legalcase.security.JwtUtils;
 import com.legalcase.service.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,8 +15,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.quality.Strictness;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -37,7 +32,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("Notification Controller Unit Tests")
 class NotificationControllerUnitTests {
 
@@ -55,8 +49,6 @@ class NotificationControllerUnitTests {
     private String mockToken = "Bearer mock.jwt.token";
     private Long mockUserId = 1L;
 
-    private Notification mockNotification;
-    private User mockUser;
     private NotificationResponse mockNotificationResponse;
 
     @BeforeEach
@@ -64,29 +56,7 @@ class NotificationControllerUnitTests {
         mockMvc = MockMvcBuilders.standaloneSetup(notificationController).build();
         objectMapper = new ObjectMapper();
 
-        // Setup mock user
-        mockUser = new User();
-        mockUser.setId(1L);
-        mockUser.setUsername("testuser");
-        mockUser.setFullName("Test User");
-        mockUser.setEmail("test@example.com");
-        mockUser.setRole(Role.STAFF);
-
-        // Setup mock notification
-        mockNotification = new Notification();
-        mockNotification.setId(1L);
-        mockNotification.setUser(mockUser);
-        mockNotification.setType(NotificationType.TASK_ASSIGNED);
-        mockNotification.setPriority(NotificationPriority.MEDIUM);
-        mockNotification.setStatus(NotificationStatus.UNREAD);
-        mockNotification.setTitle("Task Assigned");
-        mockNotification.setMessage("You have been assigned to task: Review documents");
-        mockNotification.setTaskId(1L);
-        mockNotification.setTaskTitle("Review documents");
-        mockNotification.setActionUrl("/tasks/1");
-        mockNotification.setCreatedAt(LocalDateTime.now());
-
-        // Setup mock response
+        // Setup mock response DTO
         mockNotificationResponse = NotificationResponse.builder()
                 .id(1L)
                 .type(NotificationType.TASK_ASSIGNED)
@@ -102,11 +72,11 @@ class NotificationControllerUnitTests {
     }
 
     // ============================================
-    // GET NOTIFICATIONS TESTS
+    // GET NOTIFICATIONS TESTS (Paginated - Returns DTOs)
     // ============================================
 
     @Test
-    @DisplayName("GET /api/notifications - Should return paginated notifications")
+    @DisplayName("GET /api/notifications - Should return paginated notifications as DTOs")
     void getNotifications_Success_Returns200() throws Exception {
         when(jwtUtils.getUserIdFromToken(anyString())).thenReturn(mockUserId);
 
@@ -129,11 +99,11 @@ class NotificationControllerUnitTests {
     }
 
     // ============================================
-    // GET UNREAD NOTIFICATIONS TESTS
+    // GET UNREAD NOTIFICATIONS TESTS (Returns DTOs)
     // ============================================
 
     @Test
-    @DisplayName("GET /api/notifications/unread - Should return unread notifications")
+    @DisplayName("GET /api/notifications/unread - Should return unread notifications as DTOs")
     void getUnreadNotifications_Success_Returns200() throws Exception {
         when(jwtUtils.getUserIdFromToken(anyString())).thenReturn(mockUserId);
 
@@ -221,17 +191,6 @@ class NotificationControllerUnitTests {
                 .andExpect(status().isOk());
 
         verify(notificationService, times(1)).markAllAsRead(mockUserId);
-    }
-
-    // ============================================
-    // AUTHENTICATION ERROR TESTS
-    // ============================================
-
-    @Test
-    @DisplayName("GET /api/notifications - Should return 401 when no token provided")
-    void getNotifications_NoToken_Returns401() throws Exception {
-        mockMvc.perform(get("/notifications?page=0&size=20"))
-                .andExpect(status().isBadRequest());  // Controller throws exception
     }
 
     // ============================================

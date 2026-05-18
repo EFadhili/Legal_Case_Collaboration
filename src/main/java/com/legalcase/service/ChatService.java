@@ -1,5 +1,6 @@
 package com.legalcase.service;
 
+import com.legalcase.dto.response.ChatMessageResponse;
 import com.legalcase.dto.response.UnreadCountResponse;
 import com.legalcase.entity.ChatMessage;
 import com.legalcase.entity.LegalCase;
@@ -141,41 +142,49 @@ public class ChatService {
     }
 
     /**
-     * Get messages for a case with pagination.
+     * Get messages for a case with pagination (WITH associations initialized).
      */
-    public Page<ChatMessage> getMessagesByCase(Long caseId, int page, int size, Long userId) {
+    public Page<ChatMessageResponse> getMessagesByCase(Long caseId, int page, int size, Long userId) {
         log.info("User {} fetching messages for case: {}, page: {}, size: {}", userId, caseId, page, size);
 
-        // Verify membership
         verifyCaseMembership(caseId, userId);
 
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "sentAt"));
-        return chatMessageRepository.findByLegalCaseOrderBySentAtDesc(legalCase, pageable);
+        Page<ChatMessage> messages = chatMessageRepository.findByLegalCaseWithDetailsPaginated(legalCase, pageable);
+
+        return messages.map(ChatMessageResponse::fromEntity);
     }
 
     /**
-     * Get all messages for a case (for WebSocket initial load).
+     * Get all messages for a case (for WebSocket initial load) WITH associations.
      */
-    public List<ChatMessage> getAllMessagesByCase(Long caseId, Long userId) {
-        // Verify membership
+    public List<ChatMessageResponse> getAllMessagesByCase(Long caseId, Long userId) {
         verifyCaseMembership(caseId, userId);
 
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
-        return chatMessageRepository.findByLegalCaseOrderBySentAtAsc(legalCase);
+
+        List<ChatMessage> messages = chatMessageRepository.findByLegalCaseWithDetails(legalCase);
+
+        return messages.stream()
+                .map(ChatMessageResponse::fromEntity)
+                .collect(Collectors.toList());
     }
 
     /**
-     * Get unread messages for a user in a specific case.
+     * Get unread messages for a user in a specific case WITH associations.
      */
-    public List<ChatMessage> getUnreadMessagesByCase(Long caseId, Long userId) {
-        // Verify membership
+    public List<ChatMessageResponse> getUnreadMessagesByCase(Long caseId, Long userId) {
         verifyCaseMembership(caseId, userId);
 
-        return chatMessageRepository.findUnreadMessagesByCaseAndUser(caseId, userId);
+        List<ChatMessage> messages = chatMessageRepository.findUnreadMessagesByCaseAndUserWithDetails(caseId, userId);
+
+        return messages.stream()
+                .map(ChatMessageResponse::fromEntity)
+                .collect(Collectors.toList());
     }
 
     /**

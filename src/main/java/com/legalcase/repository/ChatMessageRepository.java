@@ -16,34 +16,62 @@ import java.util.List;
 @Repository
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
 
-    // Get messages for a case with pagination
+    // ===== EXISTING METHODS =====
+
     Page<ChatMessage> findByLegalCaseOrderBySentAtDesc(LegalCase legalCase, Pageable pageable);
 
-    // Get messages for a case (latest first for WebSocket initial load)
     List<ChatMessage> findByLegalCaseOrderBySentAtAsc(LegalCase legalCase);
 
-    // Get unread messages for a user in a specific case
     @Query("SELECT cm FROM ChatMessage cm WHERE cm.legalCase.id = :caseId AND cm.isRead = false AND cm.sender.id != :userId")
     List<ChatMessage> findUnreadMessagesByCaseAndUser(@Param("caseId") Long caseId, @Param("userId") Long userId);
 
-    // Get all unread messages for a user across all cases they are members of
     @Query("SELECT cm FROM ChatMessage cm WHERE cm.legalCase.id IN :caseIds AND cm.isRead = false AND cm.sender.id != :userId")
     List<ChatMessage> findAllUnreadMessagesForUser(@Param("caseIds") List<Long> caseIds, @Param("userId") Long userId);
 
-    // Count unread messages by case for a user
     @Query("SELECT cm.legalCase.id, COUNT(cm) FROM ChatMessage cm WHERE cm.legalCase.id IN :caseIds AND cm.isRead = false AND cm.sender.id != :userId GROUP BY cm.legalCase.id")
     List<Object[]> countUnreadMessagesByCase(@Param("caseIds") List<Long> caseIds, @Param("userId") Long userId);
 
-    // Mark messages as read
     @Modifying
     @Query("UPDATE ChatMessage cm SET cm.isRead = true, cm.readAt = :readAt WHERE cm.id IN :messageIds")
     void markMessagesAsRead(@Param("messageIds") List<Long> messageIds, @Param("readAt") LocalDateTime readAt);
 
-    // Mark all messages in a case as read for a user (excluding user's own messages)
     @Modifying
     @Query("UPDATE ChatMessage cm SET cm.isRead = true, cm.readAt = :readAt WHERE cm.legalCase.id = :caseId AND cm.sender.id != :userId AND cm.isRead = false")
     void markAllMessagesAsReadInCase(@Param("caseId") Long caseId, @Param("userId") Long userId, @Param("readAt") LocalDateTime readAt);
 
-    // Delete all messages for a case (when case is archived/deleted)
     void deleteByLegalCase(LegalCase legalCase);
+
+    // ===== NEW JOIN FETCH METHODS (Prevent LazyInitializationException) =====
+
+    /**
+     * Get messages for a case with all associations initialized (sender, legalCase)
+     */
+    @Query("SELECT DISTINCT cm FROM ChatMessage cm " +
+            "LEFT JOIN FETCH cm.sender " +
+            "LEFT JOIN FETCH cm.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE cm.legalCase = :legalCase " +
+            "ORDER BY cm.sentAt ASC")
+    List<ChatMessage> findByLegalCaseWithDetails(@Param("legalCase") LegalCase legalCase);
+
+    /**
+     * Get paginated messages for a case with associations initialized
+     */
+    @Query("SELECT DISTINCT cm FROM ChatMessage cm " +
+            "LEFT JOIN FETCH cm.sender " +
+            "LEFT JOIN FETCH cm.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE cm.legalCase = :legalCase " +
+            "ORDER BY cm.sentAt DESC")
+    Page<ChatMessage> findByLegalCaseWithDetailsPaginated(@Param("legalCase") LegalCase legalCase, Pageable pageable);
+
+    /**
+     * Get unread messages with associations initialized
+     */
+    @Query("SELECT DISTINCT cm FROM ChatMessage cm " +
+            "LEFT JOIN FETCH cm.sender " +
+            "LEFT JOIN FETCH cm.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE cm.legalCase.id = :caseId AND cm.isRead = false AND cm.sender.id != :userId")
+    List<ChatMessage> findUnreadMessagesByCaseAndUserWithDetails(@Param("caseId") Long caseId, @Param("userId") Long userId);
 }

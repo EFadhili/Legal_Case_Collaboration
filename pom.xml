@@ -132,6 +132,19 @@
             <version>1.12.600</version>
         </dependency>
 
+        <!-- Google Gemini AI -->
+        <dependency>
+            <groupId>com.google.cloud</groupId>
+            <artifactId>google-cloud-vertexai</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+
+        <!-- Or use direct HTTP client (Recommended - simpler) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
         <!-- PDF Processing -->
         <dependency>
             <groupId>org.apache.pdfbox</groupId>

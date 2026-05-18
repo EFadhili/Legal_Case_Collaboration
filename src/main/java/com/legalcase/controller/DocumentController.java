@@ -4,6 +4,7 @@ import com.legalcase.dto.request.UpdateDocumentMetadataRequest;
 import com.legalcase.dto.response.DocumentResponse;
 import com.legalcase.entity.Document;
 import com.legalcase.security.JwtUtils;
+import com.legalcase.service.DocumentProcessingService;
 import com.legalcase.service.DocumentService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -28,6 +29,7 @@ import java.util.stream.Collectors;
 public class DocumentController {
 
     private final DocumentService documentService;
+    private final DocumentProcessingService processingService;
     private final JwtUtils jwtUtils;
 
     @PostMapping("/case/{caseId}")
@@ -47,6 +49,21 @@ public class DocumentController {
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(DocumentResponse.fromEntity(document, downloadUrl, uploadedByName, uploadedByUsername));
+    }
+
+    /**
+     * Manually trigger text extraction for a document.
+     * POST /api/documents/{id}/process
+     */
+    @PostMapping("/{id}/process")
+    public ResponseEntity<Void> processDocument(@PathVariable Long id, HttpServletRequest httpRequest) {
+        Long userId = extractUserId(httpRequest);
+        log.info("User {} manually triggering text extraction for document: {}", userId, id);
+
+        Document document = documentService.findById(id);
+        processingService.extractTextAsync(document);
+
+        return ResponseEntity.accepted().build();
     }
 
     @PostMapping("/task/{taskId}")

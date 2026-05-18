@@ -25,6 +25,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
@@ -292,6 +293,7 @@ public class FileUtils {
     }
 
     private String extractTextFromTxt(InputStream inputStream) throws Exception {
-        return new String(inputStream.readAllBytes());
+        // Simple text file reading
+        return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
     }
 }

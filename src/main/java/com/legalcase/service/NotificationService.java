@@ -217,20 +217,20 @@ public class NotificationService {
     }
 
     /**
-     * Get notifications for a user (paginated).
+     * Get notifications for a user (paginated) - returns DTOs to avoid lazy loading.
      */
     public Page<NotificationResponse> getNotificationsForUser(Long userId, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<Notification> notifications = notificationRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable);
+        Page<Notification> notifications = notificationRepository.findByUserIdWithDetails(userId, pageable);
         return notifications.map(NotificationResponse::fromEntity);
     }
 
+
     /**
-     * Get unread notifications for a user.
+     * Get unread notifications for a user - returns DTOs to avoid lazy loading.
      */
     public List<NotificationResponse> getUnreadNotifications(Long userId) {
-        List<Notification> notifications = notificationRepository.findByUserIdAndStatusOrderByCreatedAtDesc(
-                userId, NotificationStatus.UNREAD);
+        List<Notification> notifications = notificationRepository.findUnreadByUserIdWithDetails(userId);
         return notifications.stream()
                 .map(NotificationResponse::fromEntity)
                 .collect(Collectors.toList());

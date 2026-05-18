@@ -39,6 +39,7 @@ public class NotificationController {
         return ResponseEntity.ok(notifications);
     }
 
+
     /**
      * Get unread notifications for current user.
      * GET /api/notifications/unread

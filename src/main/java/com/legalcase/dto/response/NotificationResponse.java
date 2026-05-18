@@ -32,7 +32,7 @@ public class NotificationResponse {
     private LocalDateTime readAt;
 
     public static NotificationResponse fromEntity(Notification notification) {
-        return NotificationResponse.builder()
+        NotificationResponseBuilder builder = NotificationResponse.builder()
                 .id(notification.getId())
                 .type(notification.getType())
                 .priority(notification.getPriority())
@@ -49,7 +49,8 @@ public class NotificationResponse {
                 .actorName(notification.getActorName())
                 .actionUrl(notification.getActionUrl())
                 .createdAt(notification.getCreatedAt())
-                .readAt(notification.getReadAt())
-                .build();
+                .readAt(notification.getReadAt());
+
+        return builder.build();
     }
 }

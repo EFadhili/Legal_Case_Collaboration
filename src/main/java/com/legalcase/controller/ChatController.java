@@ -51,6 +51,10 @@ public class ChatController {
                 .body(ChatMessageResponse.fromEntity(message));
     }
 
+    /**
+     * Get messages for a case (paginated).
+     * GET /api/chat/cases/{caseId}/messages?page=0&size=50
+     */
     @GetMapping("/cases/{caseId}/messages")
     public ResponseEntity<Page<ChatMessageResponse>> getMessagesByCase(
             @PathVariable Long caseId,
@@ -60,12 +64,17 @@ public class ChatController {
 
         Long userId = extractUserId(httpRequest);
 
-        Page<ChatMessage> messages = chatService.getMessagesByCase(caseId, page, size, userId);
-        Page<ChatMessageResponse> responses = messages.map(ChatMessageResponse::fromEntity);
+        // Now returns Page<ChatMessageResponse> directly from service
+        Page<ChatMessageResponse> responses = chatService.getMessagesByCase(caseId, page, size, userId);
 
         return ResponseEntity.ok(responses);
     }
 
+
+    /**
+     * Get all messages for a case (for initial load).
+     * GET /api/chat/cases/{caseId}/messages/all
+     */
     @GetMapping("/cases/{caseId}/messages/all")
     public ResponseEntity<List<ChatMessageResponse>> getAllMessagesByCase(
             @PathVariable Long caseId,
@@ -73,14 +82,15 @@ public class ChatController {
 
         Long userId = extractUserId(httpRequest);
 
-        List<ChatMessage> messages = chatService.getAllMessagesByCase(caseId, userId);
-        List<ChatMessageResponse> responses = messages.stream()
-                .map(ChatMessageResponse::fromEntity)
-                .collect(Collectors.toList());
+        List<ChatMessageResponse> responses = chatService.getAllMessagesByCase(caseId, userId);
 
         return ResponseEntity.ok(responses);
     }
 
+    /**
+     * Get unread messages for a user in a specific case.
+     * GET /api/chat/cases/{caseId}/unread
+     */
     @GetMapping("/cases/{caseId}/unread")
     public ResponseEntity<List<ChatMessageResponse>> getUnreadMessagesByCase(
             @PathVariable Long caseId,
@@ -88,10 +98,7 @@ public class ChatController {
 
         Long userId = extractUserId(httpRequest);
 
-        List<ChatMessage> messages = chatService.getUnreadMessagesByCase(caseId, userId);
-        List<ChatMessageResponse> responses = messages.stream()
-                .map(ChatMessageResponse::fromEntity)
-                .collect(Collectors.toList());
+        List<ChatMessageResponse> responses = chatService.getUnreadMessagesByCase(caseId, userId);
 
         return ResponseEntity.ok(responses);
     }
