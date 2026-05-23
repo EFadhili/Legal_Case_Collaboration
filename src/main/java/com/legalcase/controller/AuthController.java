@@ -7,6 +7,15 @@ import com.legalcase.dto.response.UserResponse;
 import com.legalcase.entity.User;
 import com.legalcase.security.JwtUtils;
 import com.legalcase.service.UserService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -15,14 +24,39 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+
 @RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
 @Slf4j
+@Tag(name = "Authentication", description = "User authentication and registration endpoints")
 public class AuthController {
 
     private final UserService userService;
     private final JwtUtils jwtUtils;
+
+    @Operation(
+            summary = "Register a new user",
+            description = "Creates a new user account with the specified role. Returns JWT token upon success."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "User registered successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid input data",
+                    content = @Content(examples = @ExampleObject(value = """
+                            {
+                              "timestamp": "2026-05-18T10:30:00",
+                              "status": 400,
+                              "error": "Validation Failed",
+                              "message": "Invalid request parameters",
+                              "path": "/api/auth/register",
+                              "errorCode": "VALIDATION_ERROR",
+                              "details": {
+                                "email": "Email is required",
+                                "password": "Password must be at least 8 characters"
+                              }
+                            }"""))),
+            @ApiResponse(responseCode = "409", description = "Email or username already exists")
+    })
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
@@ -57,6 +91,16 @@ public class AuthController {
         }
     }
 
+    @Operation(
+            summary = "Login user",
+            description = "Authenticates a user with email and password. Returns JWT token upon success."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Login successful"),
+            @ApiResponse(responseCode = "401", description = "Invalid credentials"),
+            @ApiResponse(responseCode = "400", description = "Validation error")
+    })
+
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
         log.info("Received login request for email: {}", request.getEmail());
@@ -87,6 +131,15 @@ public class AuthController {
         }
     }
 
+    @Operation(
+            summary = "Get user by ID",
+            description = "Retrieves user information by their unique ID"
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "User found"),
+            @ApiResponse(responseCode = "404", description = "User not found")
+    })
+
     @GetMapping("/users/{id}")
     public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
         log.info("Fetching user with ID: {}", id);
@@ -101,7 +154,13 @@ public class AuthController {
         }
     }
 
-
+    @Operation(
+            summary = "Check username availability",
+            description = "Checks if a username is already taken"
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Returns true if available, false if taken")
+    })
     // NEW: Check username availability endpoint
     @GetMapping("/check-username")
     public ResponseEntity<Boolean> isUsernameAvailable(@RequestParam String username) {
@@ -109,13 +168,28 @@ public class AuthController {
         return ResponseEntity.ok(isAvailable);
     }
 
-
+    @Operation(
+            summary = "Check email availability",
+            description = "Checks if an email address is already registered"
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Returns true if available, false if taken")
+    })
     @GetMapping("/check-email")
     public ResponseEntity<Boolean> isEmailAvailable(@RequestParam String email) {
         boolean isAvailable = userService.isEmailAvailable(email);
         return ResponseEntity.ok(isAvailable);
     }
 
+    @Operation(
+            summary = "Get current user",
+            description = "Returns the authenticated user's profile information. Requires JWT token."
+    )
+    @SecurityRequirement(name = "Bearer Authentication")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "User found"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized - Invalid or missing token")
+    })
     // FIXED: Get current user from token, not from request attribute
     @GetMapping("/me")
     public ResponseEntity<UserResponse> getCurrentUser(HttpServletRequest request) {
@@ -137,6 +211,36 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
     }
+
+    @Operation(
+            summary = "Delete own account",
+            description = "Allows a user to permanently delete their own account."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Account deleted successfully"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "404", description = "User not found")
+    })
+    @DeleteMapping("/me")
+    public ResponseEntity<Void> deleteOwnAccount(HttpServletRequest request) {
+        Long userId = extractUserId(request);
+        userService.deleteUserById(userId, userId);
+        return ResponseEntity.noContent().build();
+    }
+
+    private Long extractUserId(HttpServletRequest request) {
+        String token = extractToken(request);
+        return jwtUtils.getUserIdFromToken(token);
+    }
+
+    private String extractToken(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            throw new RuntimeException("Missing or invalid Authorization header");
+        }
+        return authHeader.substring(7);
+    }
+
 }
 
 

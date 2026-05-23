@@ -4,6 +4,7 @@ import com.legalcase.entity.Document;
 import com.legalcase.entity.User;
 import com.legalcase.enums.DocumentStatus;
 import com.legalcase.enums.TextExtractionStatus;
+import com.legalcase.exception.*;
 import com.legalcase.repository.CaseMemberRepository;
 import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.DocumentRepository;
@@ -41,22 +42,31 @@ public class DocumentService {
         log.info("Uploading document to case: {} by user: {}", caseId, uploadedById);
 
         var legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
         var uploader = userRepository.findById(uploadedById)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User", uploadedById));
 
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, uploader)) {
-            throw new RuntimeException("Only case members can upload documents");
+            throw new AccessDeniedException("Only case members can upload documents");
         }
 
-        fileUtils.validateFile(file);
+        try {
+            fileUtils.validateFile(file);
+        } catch (Exception e) {
+            throw new FileProcessingException("File validation failed: " + e.getMessage());
+        }
+
         String originalFileName = file.getOriginalFilename();
         String extension = fileUtils.getFileExtension(originalFileName);
         String storedFileName = fileUtils.generateStorageFileName(originalFileName);
         String storagePath = fileUtils.generateStoragePath(caseId, null, storedFileName);
 
-        fileUtils.uploadToS3(file, storagePath);
+        try {
+            fileUtils.uploadToS3(file, storagePath);
+        } catch (Exception e) {
+            throw new FileProcessingException("Failed to upload file to storage: " + e.getMessage());
+        }
 
         Document document = new Document();
         document.setFileName(storedFileName);
@@ -88,22 +98,31 @@ public class DocumentService {
         log.info("Uploading document to task: {} by user: {}", taskId, uploadedById);
 
         var task = taskRepository.findById(taskId)
-                .orElseThrow(() -> new RuntimeException("Task not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId));
 
         var uploader = userRepository.findById(uploadedById)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User", uploadedById));
 
         if (!caseMemberRepository.existsByLegalCaseAndUser(task.getLegalCase(), uploader)) {
-            throw new RuntimeException("Only case members can upload documents");
+            throw new AccessDeniedException("Only case members can upload documents");
         }
 
-        fileUtils.validateFile(file);
+        try {
+            fileUtils.validateFile(file);
+        } catch (Exception e) {
+            throw new FileProcessingException("File validation failed: " + e.getMessage());
+        }
+
         String originalFileName = file.getOriginalFilename();
         String extension = fileUtils.getFileExtension(originalFileName);
         String storedFileName = fileUtils.generateStorageFileName(originalFileName);
         String storagePath = fileUtils.generateStoragePath(null, taskId, storedFileName);
 
-        fileUtils.uploadToS3(file, storagePath);
+        try {
+            fileUtils.uploadToS3(file, storagePath);
+        } catch (Exception e) {
+            throw new FileProcessingException("Failed to upload file to storage: " + e.getMessage());
+        }
 
         Document document = new Document();
         document.setFileName(storedFileName);
@@ -131,7 +150,7 @@ public class DocumentService {
 
     public Document findById(Long id) {
         return documentRepository.findByIdAndIsDeletedFalse(id)
-                .orElseThrow(() -> new RuntimeException("Document not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Document", id));
     }
 
     public List<Document> getCaseDocuments(Long caseId) {
@@ -176,19 +195,27 @@ public class DocumentService {
     @Transactional
     public void permanentlyDelete(Long documentId) {
         Document document = findById(documentId);
-        fileUtils.deleteFromS3(document.getStoragePath());
+        try {
+            fileUtils.deleteFromS3(document.getStoragePath());
+        } catch (Exception e) {
+            throw new FileProcessingException("Failed to delete file from S3: " + e.getMessage());
+        }
         documentRepository.deleteById(documentId);
         log.info("Document {} permanently deleted from S3 and database", documentId);
     }
 
     public String getDownloadUrl(Document document) {
-        return fileUtils.generatePresignedUrl(document.getStoragePath());
+        try {
+            return fileUtils.generatePresignedUrl(document.getStoragePath());
+        } catch (Exception e) {
+            throw new FileProcessingException("Failed to generate download URL: " + e.getMessage());
+        }
     }
 
     public String getExtractedText(Long documentId) {
         Document document = findById(documentId);
         if (document.getExtractedText() == null) {
-            throw new RuntimeException("Text extraction not yet completed");
+            throw new BusinessException("Text extraction not yet completed for document: " + documentId);
         }
         return document.getExtractedText();
     }

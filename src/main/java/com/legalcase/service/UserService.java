@@ -2,20 +2,20 @@ package com.legalcase.service;
 
 import com.legalcase.entity.User;
 import com.legalcase.enums.Role;
+import com.legalcase.exception.*;
 import com.legalcase.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
 
 import java.time.LocalDateTime;
 import java.util.List;
 
-/**
- * Service layer for User-related business logic.
- * Handles user registration, authentication, and user management.
- */
 @Service
 @Slf4j
 @RequiredArgsConstructor
@@ -25,103 +25,62 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
-    /**
-     * Register a new user in the system.
-     * <p>
-     * Business rules:
-     * 1. Email must be unique (no existing user with same email)
-     * 2. Password must be encoded before storing
-     * 3. New users are active by default
-     * 4. Default role is STAFF unless specified otherwise
-     *
-     * @param email    User's email address (used for login)
-     * @param password Raw password (will be encoded)
-     * @param fullName User's full legal name
-     * @param role     User's role (ADMIN, LAWYER, STAFF)
-     * @return The saved User entity
-     * @throws RuntimeException if email already exists
-     */
     @Transactional
     public User registerUser(String username, String email, String password, String fullName, Role role) {
-        log.info("Attempting to register user with username: {}, email: {}", email);
+        log.info("Attempting to register user with username: {}, email: {}", username, email);
 
         validatePasswordStrength(password);
 
-        // Check if username already exists
         if (userRepository.existsByUsername(username)) {
             log.error("Registration failed - username already exists: {}", username);
-            throw new RuntimeException("Username '" + username + "' is already taken. Please choose another.");
+            throw new DuplicateResourceException("Username", "username", username);
         }
 
-        // Business rule 1: Check if email already exists
         if (userRepository.existsByEmail(email)) {
             log.error("Registration failed - email already exists: {}", email);
-            throw new RuntimeException("User with email " + email + " already exists");
+            throw new DuplicateResourceException("User", "email", email);
         }
 
-        // Business rule 2: Create new user entity
         User user = new User();
-        user.setUsername(username);      
+        user.setUsername(username);
         user.setEmail(email);
         user.setFullName(fullName);
-        user.setRole(role != null ? role : Role.STAFF); // Default to STAFF
-        user.setActive(true);  // New users are active by default
+        user.setRole(role != null ? role : Role.STAFF);
+        user.setActive(true);
         user.setCreatedAt(LocalDateTime.now());
         user.setUpdatedAt(LocalDateTime.now());
 
-        // Business rule 3: Encode password before storing (SECURITY!)
         String encodedPassword = passwordEncoder.encode(password);
         user.setPassword(encodedPassword);
 
-        // Save to database
         User savedUser = userRepository.save(user);
         log.info("User registered successfully with ID: {}", savedUser.getId());
 
         return savedUser;
     }
 
-    /**
-     * Simple registration with default STAFF role.
-     */
     @Transactional
     public User registerStaff(String username, String email, String password, String fullName) {
         return registerUser(username, email, password, fullName, Role.STAFF);
     }
 
-    /**
-     * Authenticate a user by email and password.
-     * <p>
-     * Business rules:
-     * 1. User must exist with given email
-     * 2. Password must match the stored encoded password
-     * 3. User must be active
-     *
-     * @param email       User's email
-     * @param rawPassword Plain text password to verify
-     * @return The authenticated User
-     * @throws RuntimeException if credentials are invalid or user is inactive
-     */
     @Transactional
     public User authenticate(String email, String rawPassword) {
         log.debug("Authenticating user: {}", email);
 
-        // Find user by email
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Invalid email or password"));
+                .orElseThrow(() -> new UnauthorizedException("Invalid email or password"));
 
-        // Check if user is active
         if (!user.isActive()) {
             log.warn("Authentication failed - inactive user: {}", email);
-            throw new RuntimeException("Account is deactivated. Please contact administrator.");
+            throw new UnauthorizedException("Account is deactivated. Please contact administrator.");
         }
 
-        // Verify password
         if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
             log.warn("Authentication failed - incorrect password for: {}", email);
-            throw new RuntimeException("Invalid email or password");
+            throw new UnauthorizedException("Invalid email or password");
         }
 
-        // Update last login time
         user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
 
@@ -129,39 +88,23 @@ public class UserService {
         return user;
     }
 
-    /**
-     * Find a user by their ID.
-     *
-     * @param id User's unique ID
-     * @return The User if found
-     * @throws RuntimeException if user not found
-     */
     public User findById(Long id) {
         log.debug("Finding user by ID: {}", id);
         return userRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("User", id));
     }
 
-    /**
-     * Find a user by their email address.
-     *
-     * @param email User's email address
-     * @return The User if found
-     * @throws RuntimeException if user not found
-     */
     public User findByEmail(String email) {
         log.debug("Finding user by email: {}", email);
         return userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
+                .orElseThrow(() -> new ResourceNotFoundException("User", "email", email));
     }
 
-    // NEW: Find by username
     public User findByUsername(String username) {
         return userRepository.findByUsername(username)
-                .orElseThrow(() -> new RuntimeException("User not found with username: " + username));
+                .orElseThrow(() -> new ResourceNotFoundException("User", "username", username));
     }
 
-    // NEW: Search users for adding members (exact match on username, email, or full name)
     public List<User> searchUsers(String searchTerm) {
         if (searchTerm == null || searchTerm.trim().isEmpty()) {
             return List.of();
@@ -169,7 +112,6 @@ public class UserService {
         return userRepository.findByUsernameOrEmailOrFullName(searchTerm.trim());
     }
 
-    // NEW: Partial search for autocomplete (for future UI)
     public List<User> autocompleteUsers(String partial) {
         if (partial == null || partial.trim().isEmpty()) {
             return List.of();
@@ -177,56 +119,32 @@ public class UserService {
         return userRepository.findByUsernameStartingWithOrFullNameStartingWith(partial.trim());
     }
 
-
-            /**
-     * Get all users with a specific role.
-     *
-     * @param role The role to filter by
-     * @return List of users (empty list if none found)
-     */
     public List<User> getUsersByRole(Role role) {
         log.debug("Finding users with role: {}", role);
         return userRepository.findByRole(role);
     }
 
-    /**
-     * Get all lawyers in the system.
-     */
     public List<User> getAllLawyers() {
         return getUsersByRole(Role.LAWYER);
     }
 
-    /**
-     * Get all staff members (non-lawyer, non-admin).
-     */
     public List<User> getAllStaff() {
         return getUsersByRole(Role.STAFF);
     }
 
-    /**
-     * Get all active users with a specific role.
-     */
     public List<User> getActiveUsersByRole(Role role) {
         log.debug("Finding active users with role: {}", role);
         return userRepository.findActiveUsersByRole(role);
     }
 
-    /**
-     * Deactivate a user account.
-     * Only ADMIN users should be able to call this method.
-     *
-     * @param userId  ID of user to deactivate
-     * @param adminId ID of admin performing the action (for audit)
-     */
     @Transactional
     public void deactivateUser(Long userId, Long adminId) {
         log.info("Admin {} deactivating user: {}", adminId, userId);
 
         User user = findById(userId);
 
-        // Prevent deactivating yourself
         if (userId.equals(adminId)) {
-            throw new RuntimeException("You cannot deactivate your own account");
+            throw new BusinessException("You cannot deactivate your own account");
         }
 
         user.setActive(false);
@@ -235,9 +153,6 @@ public class UserService {
         log.info("User {} deactivated successfully", userId);
     }
 
-    /**
-     * Activate a user account.
-     */
     @Transactional
     public void activateUser(Long userId) {
         log.info("Activating user: {}", userId);
@@ -249,10 +164,6 @@ public class UserService {
         log.info("User {} activated successfully", userId);
     }
 
-    /**
-     * Update user's last login time.
-     * Called when user successfully logs in.
-     */
     @Transactional
     public void updateLastLogin(Long userId) {
         int updatedCount = userRepository.updateLastLoginTime(userId, LocalDateTime.now());
@@ -261,44 +172,25 @@ public class UserService {
         }
     }
 
-    /**
-     * Check if an email is already registered.
-     */
     public boolean isEmailAvailable(String email) {
         return !userRepository.existsByEmail(email);
     }
 
-    // NEW: Check if username is available
     public boolean isUsernameAvailable(String username) {
         return !userRepository.existsByUsername(username);
     }
 
-
-
-
-
-
-      /**
-     * Count total users in the system.
-     */
     public long getTotalUserCount() {
         return userRepository.count();
     }
 
-    /**
-     * Count users by role.
-     */
     public long countUsersByRole(Role role) {
         return userRepository.countByRole(role);
     }
 
-    /**
-     * Validates password strength without using regex in service.
-     * This is an alternative to the regex approach - more readable and maintainable.
-     */
-    public static void validatePasswordStrength(String password) {
+    private void validatePasswordStrength(String password) {
         if (password == null || password.length() < 8) {
-            throw new RuntimeException("Password must be at least 8 characters long");
+            throw new ValidationException("password", "Password must be at least 8 characters long");
         }
 
         boolean hasUppercase = false;
@@ -316,19 +208,85 @@ public class UserService {
         }
 
         if (!hasUppercase) {
-            throw new RuntimeException("Password must contain at least one uppercase letter");
+            throw new ValidationException("password", "Password must contain at least one uppercase letter");
         }
         if (!hasLowercase) {
-            throw new RuntimeException("Password must contain at least one lowercase letter");
+            throw new ValidationException("password", "Password must contain at least one lowercase letter");
         }
         if (!hasDigit) {
-            throw new RuntimeException("Password must contain at least one number");
+            throw new ValidationException("password", "Password must contain at least one number");
         }
         if (!hasSpecialChar) {
-            throw new RuntimeException("Password must contain at least one special character: " + specialChars);
+            throw new ValidationException("password", "Password must contain at least one special character: " + specialChars);
         }
     }
+
+    /**
+     * Delete a user by email.
+     * Only admins should be able to call this method.
+     *
+     * @param email Email of the user to delete
+     * @param adminId ID of admin performing the action (for audit)
+     */
+    @Transactional
+    public void deleteUserByEmail(String email, Long adminId) {
+        log.info("Admin {} deleting user with email: {}", adminId, email);
+
+        User user = findByEmail(email);
+
+        // Prevent deleting yourself
+        if (user.getId().equals(adminId)) {
+            throw new BusinessException("You cannot delete your own account");
+        }
+
+        userRepository.deleteByEmail(email);
+        log.info("User with email {} deleted successfully", email);
+    }
+
+    /**
+     * Find all users with pagination (Admin only).
+     */
+    public Page<User> findAllUsers(Pageable pageable) {
+        log.debug("Finding all users with pagination");
+        return userRepository.findAll(pageable);
+    }
+
+    /**
+     * Delete user by ID (Admin only).
+     */
+    @Transactional
+    public void deleteUserById(Long userId, Long adminId) {
+        log.info("Admin {} deleting user with ID: {}", adminId, userId);
+
+        User user = findById(userId);
+
+        // Prevent deleting yourself
+        if (user.getId().equals(adminId)) {
+            throw new BusinessException("You cannot delete your own account using admin endpoint. Use DELETE /auth/me instead.");
+        }
+
+        userRepository.deleteById(userId);
+        log.info("User with ID {} deleted successfully", userId);
+    }
+
+    /**
+     * Update user role (Admin only).
+     */
+    @Transactional
+    public User updateUserRole(Long userId, String roleName) {
+        log.info("Updating user {} role to: {}", userId, roleName);
+
+        User user = findById(userId);
+        Role newRole;
+
+        try {
+            newRole = Role.valueOf(roleName.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException("role", "Invalid role. Must be ADMIN, LAWYER, or STAFF");
+        }
+
+        user.setRole(newRole);
+        return userRepository.save(user);
+    }
+
 }
-
-
-

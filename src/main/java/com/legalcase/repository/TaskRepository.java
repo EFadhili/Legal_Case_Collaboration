@@ -19,55 +19,24 @@ import java.util.Optional;
 @Repository
 public interface TaskRepository extends JpaRepository<Task, Long> {
 
-    // Basic queries
-    List<Task> findByLegalCase(LegalCase legalCase);
+    // ============================================
+    // OVERRIDE DEFAULT METHODS WITH JOIN FETCH
+    // ============================================
 
-    List<Task> findByAssignedTo(User user);
-
-    List<Task> findByStatus(TaskStatus status);
-
-    List<Task> findByType(TaskType type);
-
-    List<Task> findByPriority(TaskPriority priority);
-
-    List<Task> findByDueDateBefore(LocalDate date);
-
-    List<Task> findByDueDateAfter(LocalDate date);
-
-    // Find tasks by due date (exact match)
-    List<Task> findByDueDate(LocalDate dueDate);
-
-
-    // Composite queries
-    List<Task> findByLegalCaseAndStatus(LegalCase legalCase, TaskStatus status);
-
-    List<Task> findByLegalCaseAndAssignedTo(LegalCase legalCase, User assignedTo);
-
-    List<Task> findByLegalCaseAndType(LegalCase legalCase, TaskType type);
-
-    // Count queries
-    long countByLegalCaseAndType(LegalCase legalCase, TaskType type);
-
-    long countByLegalCaseAndTypeAndStatus(LegalCase legalCase, TaskType type, TaskStatus status);
-
-    long countByLegalCaseAndStatus(LegalCase legalCase, TaskStatus status);
-
-    // ===== JOIN FETCH methods to prevent LazyInitializationException =====
-
+    @Override
     @Query("SELECT DISTINCT t FROM Task t " +
             "LEFT JOIN FETCH t.createdBy " +
             "LEFT JOIN FETCH t.assignedTo " +
             "LEFT JOIN FETCH t.approvedBy " +
             "LEFT JOIN FETCH t.dependsOn " +
-            "WHERE t.legalCase = :legalCase")
-    List<Task> findByLegalCaseWithDetails(@Param("legalCase") LegalCase legalCase);
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.id = :id")
+    Optional<Task> findById(@Param("id") Long id);
 
-    @Query("SELECT DISTINCT t FROM Task t " +
-            "LEFT JOIN FETCH t.createdBy " +
-            "LEFT JOIN FETCH t.legalCase " +
-            "LEFT JOIN FETCH t.dependsOn " +
-            "WHERE t.assignedTo = :user")
-    List<Task> findByAssignedToWithDetails(@Param("user") User user);
+    // ============================================
+    // EXISTING METHOD NAMES WITH JOIN FETCH
+    // ============================================
 
     @Query("SELECT DISTINCT t FROM Task t " +
             "LEFT JOIN FETCH t.createdBy " +
@@ -76,15 +45,154 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
             "LEFT JOIN FETCH t.dependsOn " +
             "LEFT JOIN FETCH t.legalCase c " +
             "LEFT JOIN FETCH c.owner " +
-            "WHERE t.id = :taskId")
-    Optional<Task> findWithAllAssociations(@Param("taskId") Long taskId);
+            "WHERE t.legalCase = :legalCase")
+    List<Task> findByLegalCase(@Param("legalCase") LegalCase legalCase);
 
-    // Overdue tasks
-    @Query("SELECT t FROM Task t WHERE t.dueDate < CURRENT_DATE AND t.status != 'COMPLETED'")
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.assignedTo = :user")
+    List<Task> findByAssignedTo(@Param("user") User user);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.status = :status")
+    List<Task> findByStatus(@Param("status") TaskStatus status);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.type = :type")
+    List<Task> findByType(@Param("type") TaskType type);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.priority = :priority")
+    List<Task> findByPriority(@Param("priority") TaskPriority priority);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.dueDate = :dueDate")
+    List<Task> findByDueDate(@Param("dueDate") LocalDate dueDate);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.dueDate < :date")
+    List<Task> findByDueDateBefore(@Param("date") LocalDate date);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.dueDate > :date")
+    List<Task> findByDueDateAfter(@Param("date") LocalDate date);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.dueDate BETWEEN :startDate AND :endDate")
+    List<Task> findByDueDateBetween(@Param("startDate") LocalDate startDate,
+                                    @Param("endDate") LocalDate endDate);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.legalCase = :legalCase AND t.status = :status")
+    List<Task> findByLegalCaseAndStatus(@Param("legalCase") LegalCase legalCase,
+                                        @Param("status") TaskStatus status);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.legalCase = :legalCase AND t.assignedTo = :assignedTo")
+    List<Task> findByLegalCaseAndAssignedTo(@Param("legalCase") LegalCase legalCase,
+                                            @Param("assignedTo") User assignedTo);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.legalCase = :legalCase AND t.type = :type")
+    List<Task> findByLegalCaseAndType(@Param("legalCase") LegalCase legalCase,
+                                      @Param("type") TaskType type);
+
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.dueDate < CURRENT_DATE AND t.status != 'COMPLETED'")
     List<Task> findOverdueTasks();
 
-    @Query("SELECT t FROM Task t WHERE t.legalCase.id = :caseId AND t.dueDate < CURRENT_DATE AND t.status != 'COMPLETED'")
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.legalCase.id = :caseId AND t.dueDate < CURRENT_DATE AND t.status != 'COMPLETED'")
     List<Task> findOverdueTasksByCaseId(@Param("caseId") Long caseId);
+
+    // ============================================
+    // COUNT QUERIES (These don't need JOIN FETCH)
+    // ============================================
+
+    long countByLegalCaseAndType(LegalCase legalCase, TaskType type);
+    long countByLegalCaseAndTypeAndStatus(LegalCase legalCase, TaskType type, TaskStatus status);
+    long countByLegalCaseAndStatus(LegalCase legalCase, TaskStatus status);
+
+    // ============================================
+    // UPDATE QUERY
+    // ============================================
 
     @Modifying
     @Query("UPDATE Task t SET t.progress = 100 WHERE t.id = :taskId AND t.status = 'COMPLETED'")

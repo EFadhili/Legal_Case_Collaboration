@@ -6,6 +6,12 @@ import com.legalcase.dto.response.CommentResponse;
 import com.legalcase.entity.Comment;
 import com.legalcase.security.JwtUtils;
 import com.legalcase.service.CommentService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,15 +27,23 @@ import java.util.stream.Collectors;
 @RequestMapping("/comments")
 @RequiredArgsConstructor
 @Slf4j
+@Tag(name = "Comments", description = "Case and task level comments with threading and mentions")
+@SecurityRequirement(name = "Bearer Authentication")
 public class CommentController {
 
     private final CommentService commentService;
     private final JwtUtils jwtUtils;
 
-    /**
-     * Create a new comment (case comment, task comment, or reply).
-     * POST /api/comments
-     */
+    @Operation(
+            summary = "Create a comment",
+            description = "Creates a new comment on a case, task, or as a reply to an existing comment. Supports @username mentions."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Comment created successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid request"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Not a case member")
+    })
     @PostMapping
     public ResponseEntity<CommentResponse> createComment(
             @Valid @RequestBody CreateCommentRequest request,
@@ -52,13 +66,13 @@ public class CommentController {
                 .body(CommentResponse.fromEntity(comment, userId, isAdmin));
     }
 
-    /**
-     * Get all root comments for a case (threaded structure).
-     * GET /api/comments/case/{caseId}
-     */
+    @Operation(
+            summary = "Get case comments (threaded)",
+            description = "Returns all root comments for a case with their replies nested. Use for threaded view."
+    )
     @GetMapping("/case/{caseId}")
     public ResponseEntity<List<CommentResponse>> getCommentsByCase(
-            @PathVariable Long caseId,
+            @Parameter(description = "Case ID") @PathVariable Long caseId,
             HttpServletRequest httpRequest) {
 
         Long userId = extractUserId(httpRequest);
@@ -72,13 +86,13 @@ public class CommentController {
         return ResponseEntity.ok(responses);
     }
 
-    /**
-     * Get all comments for a case (flat list, including replies).
-     * GET /api/comments/case/{caseId}/all
-     */
+    @Operation(
+            summary = "Get case comments (flat list)",
+            description = "Returns all comments for a case as a flat list (including replies). Good for search/export."
+    )
     @GetMapping("/case/{caseId}/all")
     public ResponseEntity<List<CommentResponse>> getAllCommentsByCase(
-            @PathVariable Long caseId,
+            @Parameter(description = "Case ID") @PathVariable Long caseId,
             HttpServletRequest httpRequest) {
 
         Long userId = extractUserId(httpRequest);
@@ -92,13 +106,13 @@ public class CommentController {
         return ResponseEntity.ok(responses);
     }
 
-    /**
-     * Get all root comments for a task (threaded structure).
-     * GET /api/comments/task/{taskId}
-     */
+    @Operation(
+            summary = "Get task comments (threaded)",
+            description = "Returns all root comments for a task with their replies nested."
+    )
     @GetMapping("/task/{taskId}")
     public ResponseEntity<List<CommentResponse>> getCommentsByTask(
-            @PathVariable Long taskId,
+            @Parameter(description = "Task ID") @PathVariable Long taskId,
             HttpServletRequest httpRequest) {
 
         Long userId = extractUserId(httpRequest);
@@ -112,13 +126,13 @@ public class CommentController {
         return ResponseEntity.ok(responses);
     }
 
-    /**
-     * Get all comments for a task (flat list, including replies).
-     * GET /api/comments/task/{taskId}/all
-     */
+    @Operation(
+            summary = "Get task comments (flat list)",
+            description = "Returns all comments for a task as a flat list (including replies)."
+    )
     @GetMapping("/task/{taskId}/all")
     public ResponseEntity<List<CommentResponse>> getAllCommentsByTask(
-            @PathVariable Long taskId,
+            @Parameter(description = "Task ID") @PathVariable Long taskId,
             HttpServletRequest httpRequest) {
 
         Long userId = extractUserId(httpRequest);
@@ -132,13 +146,17 @@ public class CommentController {
         return ResponseEntity.ok(responses);
     }
 
-    /**
-     * Get a single comment by ID.
-     * GET /api/comments/{id}
-     */
+    @Operation(
+            summary = "Get comment by ID",
+            description = "Retrieves a single comment by its ID."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Comment found"),
+            @ApiResponse(responseCode = "404", description = "Comment not found")
+    })
     @GetMapping("/{id}")
     public ResponseEntity<CommentResponse> getCommentById(
-            @PathVariable Long id,
+            @Parameter(description = "Comment ID") @PathVariable Long id,
             HttpServletRequest httpRequest) {
 
         Long userId = extractUserId(httpRequest);
@@ -148,13 +166,13 @@ public class CommentController {
         return ResponseEntity.ok(CommentResponse.fromEntity(comment, userId, isAdmin));
     }
 
-    /**
-     * Update a comment (content only).
-     * PUT /api/comments/{id}
-     */
+    @Operation(
+            summary = "Update a comment",
+            description = "Updates the content of a comment. Only the author can update."
+    )
     @PutMapping("/{id}")
     public ResponseEntity<CommentResponse> updateComment(
-            @PathVariable Long id,
+            @Parameter(description = "Comment ID") @PathVariable Long id,
             @Valid @RequestBody UpdateCommentRequest request,
             HttpServletRequest httpRequest) {
 
@@ -165,13 +183,18 @@ public class CommentController {
         return ResponseEntity.ok(CommentResponse.fromEntity(comment, userId, isAdmin));
     }
 
-    /**
-     * Delete a comment.
-     * DELETE /api/comments/{id}
-     */
+    @Operation(
+            summary = "Delete a comment",
+            description = "Deletes a comment. Only the author or admin can delete."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Comment deleted successfully"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Not authorized to delete this comment")
+    })
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteComment(
-            @PathVariable Long id,
+            @Parameter(description = "Comment ID") @PathVariable Long id,
             HttpServletRequest httpRequest) {
 
         Long userId = extractUserId(httpRequest);
@@ -181,10 +204,10 @@ public class CommentController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * Get all comments mentioning the current user.
-     * GET /api/comments/mentions/me
-     */
+    @Operation(
+            summary = "Get comments mentioning me",
+            description = "Returns all comments where the current user is @mentioned."
+    )
     @GetMapping("/mentions/me")
     public ResponseEntity<List<CommentResponse>> getCommentsMentioningMe(HttpServletRequest httpRequest) {
         Long userId = extractUserId(httpRequest);

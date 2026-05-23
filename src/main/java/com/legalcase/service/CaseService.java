@@ -1,5 +1,9 @@
 package com.legalcase.service;
 
+import com.legalcase.exception.DuplicateResourceException;
+import com.legalcase.exception.InvalidStatusTransitionException;
+import com.legalcase.exception.ResourceNotFoundException;
+import com.legalcase.exception.UnauthorizedException;
 import com.legalcase.repository.NotificationRepository;
 import com.legalcase.dto.response.MemberResponse;
 import com.legalcase.entity.CaseMember;
@@ -40,10 +44,10 @@ public class CaseService {
         log.info("Creating new case: {}", title);
 
         User owner = userRepository.findById(ownerId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + ownerId));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with ID: " + ownerId));
 
         if (!owner.isLawyer() && !owner.isAdmin()) {
-            throw new RuntimeException("Only lawyers and admins can create cases");
+            throw new UnauthorizedException("Only lawyers and admins can create cases");
         }
 
         LegalCase legalCase = new LegalCase();
@@ -77,7 +81,7 @@ public class CaseService {
 
     public LegalCase findById(Long id) {
         return caseRepository.findByIdWithDetails(id)
-                .orElseThrow(() -> new RuntimeException("Case not found with ID: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Case not found with ID: " + id));
     }
 
     public List<LegalCase> getCasesByOwner(Long ownerId) {
@@ -98,14 +102,14 @@ public class CaseService {
 
         LegalCase legalCase = findById(caseId);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         if (!user.isLawyer() && !user.isAdmin()) {
-            throw new RuntimeException("Only lawyers and admins can change case status");
+            throw new UnauthorizedException("Only lawyers and admins can change case status");
         }
 
         if (!legalCase.canTransitionTo(newStatus)) {
-            throw new RuntimeException(String.format(
+            throw new InvalidStatusTransitionException(String.format(
                     "Invalid status transition from %s to %s",
                     legalCase.getStatus(), newStatus));
         }
@@ -144,7 +148,7 @@ public class CaseService {
     private void validateInProgressTransition(LegalCase legalCase) {
         long mandatoryTaskCount = caseRepository.countMandatoryTasksByCaseId(legalCase.getId());
         if (mandatoryTaskCount == 0) {
-            throw new RuntimeException("Cannot move to IN_PROGRESS: At least one task must be assigned to the case");
+            throw new InvalidStatusTransitionException("Cannot move to IN_PROGRESS: At least one task must be assigned to the case");
         }
         log.info("Case {} has {} mandatory tasks - ready for IN_PROGRESS",
                 legalCase.getId(), mandatoryTaskCount);
@@ -155,11 +159,11 @@ public class CaseService {
         long completedMandatory = caseRepository.countCompletedMandatoryTasksByCaseId(legalCase.getId());
 
         if (totalMandatory == 0) {
-            throw new RuntimeException("Cannot close case: No mandatory tasks defined");
+            throw new InvalidStatusTransitionException("Cannot close case: No mandatory tasks defined");
         }
 
         if (completedMandatory < totalMandatory) {
-            throw new RuntimeException(String.format(
+            throw new InvalidStatusTransitionException(String.format(
                     "Cannot close case: Only %d of %d mandatory tasks completed",
                     completedMandatory, totalMandatory));
         }
@@ -170,10 +174,10 @@ public class CaseService {
 
     private void validateArchivedTransition(LegalCase legalCase) {
         if (legalCase.getStatus() != CaseStatus.CLOSED) {
-            throw new RuntimeException("Cannot archive case that is not CLOSED");
+            throw new InvalidStatusTransitionException("Cannot archive case that is not CLOSED");
         }
         if (!legalCase.isLocked()) {
-            throw new RuntimeException("Cannot archive unlocked case. Case must be locked first.");
+            throw new InvalidStatusTransitionException("Cannot archive unlocked case. Case must be locked first.");
         }
     }
 
@@ -183,10 +187,10 @@ public class CaseService {
 
         LegalCase legalCase = findById(caseId);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         if (!user.isAdmin()) {
-            throw new RuntimeException("Only admins can lock/unlock cases");
+            throw new UnauthorizedException("Only admins can lock/unlock cases");
         }
 
         legalCase.setLocked(locked);
@@ -198,10 +202,10 @@ public class CaseService {
     public LegalCase updatePriority(Long caseId, CasePriority priority, Long userId) {
         LegalCase legalCase = findById(caseId);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         if (!user.isLawyer() && !user.isAdmin()) {
-            throw new RuntimeException("Only lawyers and admins can change case priority");
+            throw new UnauthorizedException("Only lawyers and admins can change case priority");
         }
 
         legalCase.setPriority(priority);
@@ -213,10 +217,10 @@ public class CaseService {
     public LegalCase updateDueDate(Long caseId, LocalDate dueDate, Long userId) {
         LegalCase legalCase = findById(caseId);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         if (!user.isLawyer() && !user.isAdmin()) {
-            throw new RuntimeException("Only lawyers and admins can change case due date");
+            throw new UnauthorizedException("Only lawyers and admins can change case due date");
         }
 
         legalCase.setDueDate(dueDate);
@@ -233,14 +237,14 @@ public class CaseService {
 
         LegalCase legalCase = findById(caseId);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with ID: " + userId));
 
         if (legalCase.isLocked()) {
-            throw new RuntimeException("Cannot add members to a locked case");
+            throw new InvalidStatusTransitionException("Cannot add members to a locked case");
         }
 
         if (caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
-            throw new RuntimeException("User is already a member of this case");
+            throw new DuplicateResourceException("User is already a member of this case");
         }
 
         validateUserRoleForCaseRole(user, role);
@@ -265,13 +269,13 @@ public class CaseService {
         LegalCase legalCase = findById(caseId);
 
         if (legalCase.isLocked()) {
-            throw new RuntimeException("Cannot add members to a locked case");
+            throw new InvalidStatusTransitionException("Cannot add members to a locked case");
         }
 
         User user = findUserByIdentifier(identifier);
 
         if (caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
-            throw new RuntimeException("User is already a member of this case");
+            throw new DuplicateResourceException("User is already a member of this case");
         }
 
         validateUserRoleForCaseRole(user, role);
@@ -298,7 +302,7 @@ public class CaseService {
         LegalCase legalCase = findById(caseId);
 
         if (legalCase.isLocked()) {
-            throw new RuntimeException("Cannot add members to a locked case");
+            throw new InvalidStatusTransitionException("Cannot add members to a locked case");
         }
 
         List<CaseMember> addedMembers = new ArrayList<>();
@@ -328,12 +332,14 @@ public class CaseService {
                 // Send notification
                 notificationService.notifyUserAddedToCase(user.getId(), caseId, addedByUserId);
 
-            } catch (RuntimeException e) {
-                // User not found
+            } catch (ResourceNotFoundException e) {
                 notFoundUsers.add(identifier);
-                log.error("Failed to add user {}: {}", identifier, e.getMessage());
+                log.warn("User not found: {}", identifier);  // Use warn, not error
+            } catch (DuplicateResourceException e) {
+                alreadyMembers.add(identifier);
+                log.warn("User already member: {}", identifier);
             } catch (Exception e) {
-                log.error("Failed to add user {}: {}", identifier, e.getMessage());
+                log.error("Unexpected error adding user {}: {}", identifier, e.getMessage());
             }
         }
 
@@ -356,7 +362,7 @@ public class CaseService {
     private User findUserByIdentifier(String identifier) {
         return userRepository.findByUsername(identifier)
                 .or(() -> userRepository.findByEmail(identifier))
-                .orElseThrow(() -> new RuntimeException("User not found with username or email: " + identifier));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with username or email: " + identifier));
     }
 
     /**
@@ -372,7 +378,7 @@ public class CaseService {
         switch (caseRole) {
             case LAWYER:
                 if (!user.isLawyer() && !user.isAdmin()) {
-                    throw new RuntimeException("User '" + user.getUsername() +
+                    throw new InvalidStatusTransitionException("User '" + user.getUsername() +
                             "' cannot be assigned as LAWYER. User must have LAWYER or ADMIN system role.");
                 }
                 break;
@@ -388,14 +394,14 @@ public class CaseService {
 
         LegalCase legalCase = findById(caseId);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         if (legalCase.isLocked()) {
-            throw new RuntimeException("Cannot remove members from a locked case");
+            throw new InvalidStatusTransitionException("Cannot remove members from a locked case");
         }
 
         if (legalCase.getOwner().getId().equals(userId)) {
-            throw new RuntimeException("Cannot remove the case owner");
+            throw new InvalidStatusTransitionException("Cannot remove the case owner");
         }
 
         caseMemberRepository.deleteByLegalCaseAndUser(legalCase, user);
@@ -403,7 +409,7 @@ public class CaseService {
 
     public List<MemberResponse> getCaseMembers(Long caseId) {
         LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Case not found"));
         List<CaseMember> members = caseMemberRepository.findByLegalCaseWithDetails(legalCase);
         return members.stream()
                 .map(MemberResponse::fromEntity)
@@ -413,7 +419,7 @@ public class CaseService {
     public boolean isCaseMember(Long caseId, Long userId) {
         LegalCase legalCase = findById(caseId);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
         return caseMemberRepository.existsByLegalCaseAndUser(legalCase, user);
     }
 
@@ -421,7 +427,7 @@ public class CaseService {
         try {
             LegalCase legalCase = findById(caseId);
             User user = userRepository.findById(userId)
-                    .orElseThrow(() -> new RuntimeException("User not found"));
+                    .orElseThrow(() -> new ResourceNotFoundException("User not found"));
             return caseMemberRepository.findByLegalCaseAndUser(legalCase, user)
                     .map(member -> member.getRole() == requiredRole)
                     .orElse(false);

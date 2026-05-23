@@ -2,6 +2,8 @@ package com.legalcase.service;
 
 import com.legalcase.entity.Document;
 import com.legalcase.enums.TextExtractionStatus;
+import com.legalcase.exception.FileProcessingException;
+import com.legalcase.exception.ResourceNotFoundException;
 import com.legalcase.repository.DocumentRepository;
 import com.legalcase.util.FileUtils;
 import lombok.RequiredArgsConstructor;
@@ -40,7 +42,6 @@ public class DocumentProcessingService {
 
         while (retryCount < maxRetries) {
             try {
-                // Update status to PROCESSING
                 documentRepository.updateExtractionStatus(
                         document.getId(),
                         TextExtractionStatus.PROCESSING,
@@ -48,7 +49,6 @@ public class DocumentProcessingService {
                         LocalDateTime.now()
                 );
 
-                // Call process document directly (NOT in a separate CompletableFuture)
                 processDocument(document);
 
                 log.info("Text extraction completed for document: {}", document.getId());
@@ -71,10 +71,9 @@ public class DocumentProcessingService {
         return CompletableFuture.completedFuture(null);
     }
 
-    @Transactional  // Keep this
+    @Transactional
     protected void processDocument(Document document) {
         try {
-            // Update progress to 25%
             documentRepository.updateExtractionStatus(
                     document.getId(),
                     TextExtractionStatus.PROCESSING,
@@ -82,10 +81,8 @@ public class DocumentProcessingService {
                     document.getProcessingStartedAt()
             );
 
-            // Download file from S3 and extract text
             String extractedText = extractTextFromS3(document);
 
-            // Update progress to 75%
             documentRepository.updateExtractionStatus(
                     document.getId(),
                     TextExtractionStatus.PROCESSING,
@@ -93,14 +90,12 @@ public class DocumentProcessingService {
                     document.getProcessingStartedAt()
             );
 
-            // Mark as completed
             documentRepository.markExtractionComplete(
                     document.getId(),
                     extractedText,
                     LocalDateTime.now()
             );
 
-            // Update progress to 100%
             documentRepository.updateExtractionStatus(
                     document.getId(),
                     TextExtractionStatus.PROCESSING,
@@ -109,15 +104,15 @@ public class DocumentProcessingService {
             );
 
         } catch (Exception e) {
-            throw new RuntimeException("Failed to process document: " + e.getMessage(), e);
+            throw new FileProcessingException("Failed to process document: " + e.getMessage(), e);
         }
     }
 
     private String extractTextFromS3(Document document) throws Exception {
         try (InputStream inputStream = fileUtils.downloadFromS3(document.getStoragePath())) {
             return fileUtils.extractTextFromFile(inputStream, document.getFileExtension());
+        } catch (Exception e) {
+            throw new FileProcessingException("Failed to extract text from document: " + e.getMessage(), e);
         }
     }
 }
-
-

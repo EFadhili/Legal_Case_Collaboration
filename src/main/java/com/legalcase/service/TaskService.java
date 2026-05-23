@@ -1,12 +1,12 @@
 package com.legalcase.service;
 
-import com.legalcase.repository.NotificationRepository;
 import com.legalcase.entity.LegalCase;
 import com.legalcase.entity.Task;
 import com.legalcase.entity.User;
 import com.legalcase.enums.TaskPriority;
 import com.legalcase.enums.TaskStatus;
 import com.legalcase.enums.TaskType;
+import com.legalcase.exception.*;
 import com.legalcase.repository.CaseMemberRepository;
 import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.TaskRepository;
@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -40,17 +41,17 @@ public class TaskService {
         log.info("Creating task: {} in case: {}", title, caseId);
 
         LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
         if (legalCase.isLocked()) {
-            throw new RuntimeException("Cannot create tasks in a locked case");
+            throw new InvalidStatusTransitionException("Cannot create tasks in a locked case");
         }
 
         User createdBy = userRepository.findById(createdById)
-                .orElseThrow(() -> new RuntimeException("User not found: " + createdById));
+                .orElseThrow(() -> new ResourceNotFoundException("User", createdById));
 
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, createdBy)) {
-            throw new RuntimeException("Only case members can create tasks");
+            throw new AccessDeniedException("Only case members can create tasks");
         }
 
         Task task = new Task();
@@ -66,47 +67,163 @@ public class TaskService {
 
         if (assignedToUserId != null) {
             User assignedTo = userRepository.findById(assignedToUserId)
-                    .orElseThrow(() -> new RuntimeException("User not found: " + assignedToUserId));
+                    .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
 
             if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, assignedTo)) {
-                throw new RuntimeException("Assigned user must be a case member");
+                throw new AccessDeniedException("Assigned user must be a case member");
             }
             task.setAssignedTo(assignedTo);
         }
 
         if (dependsOnTaskId != null) {
             Task dependsOn = taskRepository.findById(dependsOnTaskId)
-                    .orElseThrow(() -> new RuntimeException("Dependency task not found: " + dependsOnTaskId));
+                    .orElseThrow(() -> new ResourceNotFoundException("Dependency Task", dependsOnTaskId));
             task.setDependsOn(dependsOn);
         }
 
         Task saved = taskRepository.save(task);
         log.info("Task created with ID: {}", saved.getId());
 
-        return findWithAllAssociations(saved.getId());
+        return findById(saved.getId());
     }
+
+    // ============================================
+    // BASIC FIND METHODS
+    // ============================================
 
     public Task findById(Long id) {
         return taskRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Task not found with ID: " + id));
-    }
-
-    public Task findWithAllAssociations(Long taskId) {
-        return taskRepository.findWithAllAssociations(taskId)
-                .orElseThrow(() -> new RuntimeException("Task not found with ID: " + taskId));
+                .orElseThrow(() -> new ResourceNotFoundException("Task", id));
     }
 
     public List<Task> getTasksByCase(Long caseId) {
         LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
-        return taskRepository.findByLegalCaseWithDetails(legalCase);
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        return taskRepository.findByLegalCase(legalCase);
     }
 
     public List<Task> getTasksByAssignedUser(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + userId));
-        return taskRepository.findByAssignedToWithDetails(user);
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
+        return taskRepository.findByAssignedTo(user);
     }
+
+    // ============================================
+    // STATUS & TYPE & PRIORITY METHODS
+    // ============================================
+
+    public List<Task> getTasksByStatus(TaskStatus status) {
+        return taskRepository.findByStatus(status);
+    }
+
+    public List<Task> getTasksByType(TaskType type) {
+        return taskRepository.findByType(type);
+    }
+
+    public List<Task> getTasksByPriority(TaskPriority priority) {
+        return taskRepository.findByPriority(priority);
+    }
+
+    public List<Task> getTasksByAssignedTo(Long assignedToUserId) {
+        User assignedTo = userRepository.findById(assignedToUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
+        return taskRepository.findByAssignedTo(assignedTo);
+    }
+
+    // ============================================
+    // CASE + FILTER METHODS
+    // ============================================
+
+    public List<Task> getTasksByCaseAndStatus(Long caseId, TaskStatus status) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        return taskRepository.findByLegalCaseAndStatus(legalCase, status);
+    }
+
+    public List<Task> getTasksByCaseAndAssignedTo(Long caseId, Long assignedToUserId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        User assignedTo = userRepository.findById(assignedToUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
+        return taskRepository.findByLegalCaseAndAssignedTo(legalCase, assignedTo);
+    }
+
+    public List<Task> getTasksByCaseAndType(Long caseId, TaskType type) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        return taskRepository.findByLegalCaseAndType(legalCase, type);
+    }
+
+    // ============================================
+    // DUE DATE METHODS
+    // ============================================
+
+    public List<Task> getTasksByDueDate(LocalDate dueDate) {
+        return taskRepository.findByDueDate(dueDate);
+    }
+
+    public List<Task> getTasksByDueDateBefore(LocalDate date) {
+        return taskRepository.findByDueDateBefore(date);
+    }
+
+    public List<Task> getTasksByDueDateAfter(LocalDate date) {
+        return taskRepository.findByDueDateAfter(date);
+    }
+
+    public List<Task> getTasksByDueDateBetween(LocalDate startDate, LocalDate endDate) {
+        return taskRepository.findByDueDateBetween(startDate, endDate);
+    }
+
+    // ============================================
+    // OVERDUE METHODS
+    // ============================================
+
+    public List<Task> getOverdueTasksByCase(Long caseId) {
+        return taskRepository.findOverdueTasksByCaseId(caseId);
+    }
+
+    public List<Task> getAllOverdueTasks() {
+        return taskRepository.findOverdueTasks();
+    }
+
+    // ============================================
+    // UNBLOCKED METHODS
+    // ============================================
+
+    public List<Task> getUnblockedTasksByCase(Long caseId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        List<Task> tasks = taskRepository.findByLegalCase(legalCase);
+        return tasks.stream()
+                .filter(t -> !t.isBlockedByDependency())
+                .toList();
+    }
+
+    // ============================================
+    // COUNT METHODS
+    // ============================================
+
+    public long countTasksByCaseAndType(Long caseId, TaskType type) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        return taskRepository.countByLegalCaseAndType(legalCase, type);
+    }
+
+    public long countTasksByCaseAndTypeAndStatus(Long caseId, TaskType type, TaskStatus status) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        return taskRepository.countByLegalCaseAndTypeAndStatus(legalCase, type, status);
+    }
+
+    public long countTasksByCaseAndStatus(Long caseId, TaskStatus status) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        return taskRepository.countByLegalCaseAndStatus(legalCase, status);
+    }
+
+    // ============================================
+    // UPDATE METHODS
+    // ============================================
 
     @Transactional
     public Task updateStatus(Long taskId, TaskStatus newStatus, Long userId) {
@@ -114,11 +231,11 @@ public class TaskService {
 
         Task task = findById(taskId);
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
         LegalCase legalCase = task.getLegalCase();
 
         if (legalCase.isLocked()) {
-            throw new RuntimeException("Cannot update tasks in a locked case");
+            throw new InvalidStatusTransitionException("Cannot update tasks in a locked case");
         }
 
         boolean isAdmin = user.isAdmin();
@@ -128,22 +245,22 @@ public class TaskService {
                 .orElse(false);
 
         if (!task.canTransitionTo(newStatus)) {
-            throw new RuntimeException(String.format(
+            throw new InvalidStatusTransitionException(String.format(
                     "Invalid status transition from %s to %s", task.getStatus(), newStatus));
         }
 
         if (newStatus == TaskStatus.IN_PROGRESS && task.isBlockedByDependency()) {
             String dependencyTitle = task.getDependsOn() != null ? task.getDependsOn().getTitle() : "Unknown";
-            throw new RuntimeException("Cannot start task: Dependency task '" + dependencyTitle + "' is not completed");
+            throw new InvalidStatusTransitionException("Cannot start task: Dependency task '" + dependencyTitle + "' is not completed");
         }
 
         if (newStatus == TaskStatus.REVIEW) {
             if (!isAssignedUser && !isCaseLawyer && !isAdmin) {
-                throw new RuntimeException("Only assigned user, case lawyer, or admin can move task to REVIEW");
+                throw new UnauthorizedException("Only assigned user, case lawyer, or admin can move task to REVIEW");
             }
         } else if (newStatus == TaskStatus.COMPLETED) {
             if (!isCaseLawyer && !isAdmin) {
-                throw new RuntimeException("Only case lawyers or admins can approve and complete tasks");
+                throw new UnauthorizedException("Only case lawyers or admins can approve and complete tasks");
             }
             task.setApprovedBy(user);
             task.setApprovedAt(LocalDateTime.now());
@@ -159,7 +276,7 @@ public class TaskService {
         taskRepository.save(task);
         log.info("Task {} status updated to {}", taskId, newStatus);
 
-        return findWithAllAssociations(taskId);
+        return findById(taskId);
     }
 
     @Transactional
@@ -170,14 +287,14 @@ public class TaskService {
         LegalCase legalCase = task.getLegalCase();
 
         if (legalCase.isLocked()) {
-            throw new RuntimeException("Cannot update tasks in a locked case");
+            throw new InvalidStatusTransitionException("Cannot update tasks in a locked case");
         }
 
         boolean isAssignedUser = task.getAssignedTo() != null && task.getAssignedTo().getId().equals(userId);
         boolean isAdmin = userRepository.findById(userId).map(User::isAdmin).orElse(false);
 
         if (!isAssignedUser && !isAdmin) {
-            throw new RuntimeException("Only assigned user or admin can update task progress");
+            throw new UnauthorizedException("Only assigned user or admin can update task progress");
         }
 
         task.setProgress(progress);
@@ -192,7 +309,7 @@ public class TaskService {
 
         taskRepository.save(task);
 
-        return findWithAllAssociations(taskId);
+        return findById(taskId);
     }
 
     @Transactional
@@ -203,14 +320,14 @@ public class TaskService {
         LegalCase legalCase = task.getLegalCase();
 
         if (legalCase.isLocked()) {
-            throw new RuntimeException("Cannot assign tasks in a locked case");
+            throw new InvalidStatusTransitionException("Cannot assign tasks in a locked case");
         }
 
         User assignedTo = userRepository.findById(assignedToUserId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + assignedToUserId));
+                .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
 
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, assignedTo)) {
-            throw new RuntimeException("Assigned user must be a case member");
+            throw new AccessDeniedException("Assigned user must be a case member");
         }
 
         task.setAssignedTo(assignedTo);
@@ -219,19 +336,11 @@ public class TaskService {
         notificationService.notifyTaskAssigned(taskId, assignedToUserId, assignedByUserId);
         log.info("Task {} assigned to user {}", taskId, assignedToUserId);
 
-        return findWithAllAssociations(taskId);
+        return findById(taskId);
     }
 
-    public List<Task> getOverdueTasksByCase(Long caseId) {
-        return taskRepository.findOverdueTasksByCaseId(caseId);
-    }
-
-    public List<Task> getUnblockedTasksByCase(Long caseId) {
-        LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
-        List<Task> tasks = taskRepository.findByLegalCaseWithDetails(legalCase);
-        return tasks.stream()
-                .filter(t -> !t.isBlockedByDependency())
-                .toList();
+    @Transactional
+    public void setProgressTo100OnCompletion(Long taskId) {
+        taskRepository.setProgressTo100OnCompletion(taskId);
     }
 }

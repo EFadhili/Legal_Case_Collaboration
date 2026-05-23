@@ -6,6 +6,7 @@ import com.legalcase.entity.ChatMessage;
 import com.legalcase.entity.LegalCase;
 import com.legalcase.entity.User;
 import com.legalcase.enums.MessageType;
+import com.legalcase.exception.*;
 import com.legalcase.repository.CaseMemberRepository;
 import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.ChatMessageRepository;
@@ -42,13 +43,13 @@ public class ChatService {
      */
     private void verifyCaseMembership(Long caseId, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
 
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
-            throw new RuntimeException("Access denied. Only case members can participate in this chat.");
+            throw new AccessDeniedException("Only case members can participate in this chat.");
         }
     }
 
@@ -61,19 +62,17 @@ public class ChatService {
                                    Long fileSize, List<Long> mentionedUserIds, List<Long> mentionedTaskIds) {
         log.info("User {} sending message to case {}", senderId, caseId);
 
-        // Verify membership
         verifyCaseMembership(caseId, senderId);
 
         LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
-        // Check if case is archived - no new messages allowed
         if (legalCase.getStatus() == com.legalcase.enums.CaseStatus.ARCHIVED) {
-            throw new RuntimeException("Cannot send messages to archived cases");
+            throw new InvalidStatusTransitionException("Cannot send messages to archived cases");
         }
 
         User sender = userRepository.findById(senderId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + senderId));
+                .orElseThrow(() -> new ResourceNotFoundException("User", senderId));
 
         ChatMessage message = new ChatMessage();
         message.setContent(content);
@@ -89,7 +88,6 @@ public class ChatService {
             message.setFileSize(fileSize);
         }
 
-        // Set user mentions
         if (mentionedUserIds != null && !mentionedUserIds.isEmpty()) {
             String mentions = mentionedUserIds.stream()
                     .map(String::valueOf)
@@ -98,7 +96,6 @@ public class ChatService {
             log.info("Message mentions users: {}", mentionedUserIds);
         }
 
-        // Set task mentions
         if (mentionedTaskIds != null && !mentionedTaskIds.isEmpty()) {
             String mentions = mentionedTaskIds.stream()
                     .map(String::valueOf)
@@ -110,10 +107,8 @@ public class ChatService {
         ChatMessage saved = chatMessageRepository.save(message);
         log.info("Message sent with ID: {} to case: {}", saved.getId(), caseId);
 
-        // Send notifications for user mentions
         if (mentionedUserIds != null && !mentionedUserIds.isEmpty()) {
             for (Long mentionedUserId : mentionedUserIds) {
-                // Don't notify the sender about their own mention
                 if (!mentionedUserId.equals(senderId)) {
                     notificationService.notifyUserMentionedInChat(
                             mentionedUserId, caseId, saved.getId(), senderId, content);
@@ -121,7 +116,6 @@ public class ChatService {
             }
         }
 
-        // Send notifications for task mentions
         if (mentionedTaskIds != null && !mentionedTaskIds.isEmpty()) {
             for (Long mentionedTaskId : mentionedTaskIds) {
                 notificationService.notifyTaskMentionedInChat(
@@ -129,7 +123,6 @@ public class ChatService {
             }
         }
 
-        // Get all case members to notify about new message (excluding sender)
         List<Long> memberIds = caseMemberRepository.findByLegalCase(legalCase).stream()
                 .map(cm -> cm.getUser().getId())
                 .collect(Collectors.toList());
@@ -142,7 +135,7 @@ public class ChatService {
     }
 
     /**
-     * Get messages for a case with pagination (WITH associations initialized).
+     * Get messages for a case with pagination.
      */
     public Page<ChatMessageResponse> getMessagesByCase(Long caseId, int page, int size, Long userId) {
         log.info("User {} fetching messages for case: {}, page: {}, size: {}", userId, caseId, page, size);
@@ -150,7 +143,7 @@ public class ChatService {
         verifyCaseMembership(caseId, userId);
 
         LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "sentAt"));
         Page<ChatMessage> messages = chatMessageRepository.findByLegalCaseWithDetailsPaginated(legalCase, pageable);
@@ -159,13 +152,13 @@ public class ChatService {
     }
 
     /**
-     * Get all messages for a case (for WebSocket initial load) WITH associations.
+     * Get all messages for a case (for WebSocket initial load).
      */
     public List<ChatMessageResponse> getAllMessagesByCase(Long caseId, Long userId) {
         verifyCaseMembership(caseId, userId);
 
         LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found with ID: " + caseId));
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
         List<ChatMessage> messages = chatMessageRepository.findByLegalCaseWithDetails(legalCase);
 
@@ -175,7 +168,7 @@ public class ChatService {
     }
 
     /**
-     * Get unread messages for a user in a specific case WITH associations.
+     * Get unread messages for a user in a specific case.
      */
     public List<ChatMessageResponse> getUnreadMessagesByCase(Long caseId, Long userId) {
         verifyCaseMembership(caseId, userId);
@@ -192,9 +185,8 @@ public class ChatService {
      */
     public UnreadCountResponse getUnreadCounts(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found with ID: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
 
-        // Get all case IDs where user is a member
         List<LegalCase> userCases = caseRepository.findCasesByMemberId(userId);
         List<Long> caseIds = userCases.stream()
                 .map(LegalCase::getId)
@@ -207,7 +199,6 @@ public class ChatService {
                     .build();
         }
 
-        // Count unread by case
         List<Object[]> unreadCounts = chatMessageRepository.countUnreadMessagesByCase(caseIds, userId);
         Map<Long, Long> unreadByCase = new HashMap<>();
         long totalUnread = 0;
@@ -232,11 +223,9 @@ public class ChatService {
     public void markMessagesAsRead(List<Long> messageIds, Long userId) {
         log.info("User {} marking {} messages as read", userId, messageIds.size());
 
-        // Optional: Verify user has access to these messages by checking case membership
         if (messageIds != null && !messageIds.isEmpty()) {
-            // Get the first message to check case membership
             ChatMessage firstMessage = chatMessageRepository.findById(messageIds.get(0))
-                    .orElseThrow(() -> new RuntimeException("Message not found"));
+                    .orElseThrow(() -> new ResourceNotFoundException("Chat Message", messageIds.get(0)));
             verifyCaseMembership(firstMessage.getLegalCase().getId(), userId);
         }
 
@@ -250,7 +239,6 @@ public class ChatService {
     public void markAllMessagesAsReadInCase(Long caseId, Long userId) {
         log.info("User {} marking all messages as read in case {}", userId, caseId);
 
-        // Verify membership
         verifyCaseMembership(caseId, userId);
 
         chatMessageRepository.markAllMessagesAsReadInCase(caseId, userId, LocalDateTime.now());

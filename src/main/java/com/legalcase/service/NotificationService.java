@@ -5,6 +5,7 @@ import com.legalcase.entity.*;
 import com.legalcase.enums.NotificationPriority;
 import com.legalcase.enums.NotificationStatus;
 import com.legalcase.enums.NotificationType;
+import com.legalcase.exception.ResourceNotFoundException;
 import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.NotificationRepository;
 import com.legalcase.repository.TaskRepository;
@@ -33,14 +34,11 @@ public class NotificationService {
     private final CaseRepository caseRepository;
     private final TaskRepository taskRepository;
 
-    /**
-     * Create a notification.
-     */
     public Notification createNotification(Long userId, NotificationType type, NotificationPriority priority,
                                            String title, String message, Long caseId, Long taskId,
                                            Long messageId, Long actorId, String actionUrl) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
 
         Notification notification = new Notification();
         notification.setUser(user);
@@ -54,7 +52,6 @@ public class NotificationService {
         notification.setActorId(actorId);
         notification.setActionUrl(actionUrl);
 
-        // Populate case details if caseId provided
         if (caseId != null) {
             caseRepository.findById(caseId).ifPresent(c -> {
                 notification.setCaseNumber(c.getCaseNumber());
@@ -62,14 +59,12 @@ public class NotificationService {
             });
         }
 
-        // Populate task details if taskId provided
         if (taskId != null) {
             taskRepository.findById(taskId).ifPresent(t -> {
                 notification.setTaskTitle(t.getTitle());
             });
         }
 
-        // Populate actor name if actorId provided
         if (actorId != null) {
             userRepository.findById(actorId).ifPresent(actor -> {
                 notification.setActorName(actor.getFullName());
@@ -80,9 +75,6 @@ public class NotificationService {
         return notificationRepository.save(notification);
     }
 
-    /**
-     * Send notification when user is added to a case.
-     */
     public void notifyUserAddedToCase(Long userId, Long caseId, Long addedByUserId) {
         caseRepository.findById(caseId).ifPresent(c -> {
             String title = "Added to Case";
@@ -94,9 +86,6 @@ public class NotificationService {
         });
     }
 
-    /**
-     * Send notification when task is assigned to a user.
-     */
     public void notifyTaskAssigned(Long taskId, Long assignedUserId, Long assignedByUserId) {
         taskRepository.findById(taskId).ifPresent(t -> {
             String title = "Task Assigned";
@@ -108,9 +97,6 @@ public class NotificationService {
         });
     }
 
-    /**
-     * Send notification when user is @mentioned in chat.
-     */
     public void notifyUserMentionedInChat(Long mentionedUserId, Long caseId, Long messageId,
                                           Long senderId, String messageContent) {
         caseRepository.findById(caseId).ifPresent(c -> {
@@ -126,9 +112,6 @@ public class NotificationService {
         });
     }
 
-    /**
-     * Send notification when task is mentioned in chat.
-     */
     public void notifyTaskMentionedInChat(Long mentionedTaskId, Long caseId, Long messageId,
                                           Long senderId, String messageContent) {
         taskRepository.findById(mentionedTaskId).ifPresent(t -> {
@@ -139,7 +122,6 @@ public class NotificationService {
                     t.getTitle(), preview);
             String actionUrl = String.format("/tasks/%d", mentionedTaskId);
 
-            // Notify the task assignee
             if (t.getAssignedTo() != null) {
                 createNotification(t.getAssignedTo().getId(), NotificationType.TASK_MENTIONED, NotificationPriority.MEDIUM,
                         title, message, caseId, mentionedTaskId, messageId, senderId, actionUrl);
@@ -147,9 +129,6 @@ public class NotificationService {
         });
     }
 
-    /**
-     * Send notification when task deadline is approaching.
-     */
     public void notifyTaskDeadlineApproaching(Long taskId, Long assignedUserId, int daysRemaining) {
         taskRepository.findById(taskId).ifPresent(t -> {
             String title = "Task Deadline Approaching";
@@ -164,9 +143,6 @@ public class NotificationService {
         });
     }
 
-    /**
-     * Send notification when task is overdue.
-     */
     public void notifyTaskOverdue(Long taskId, Long assignedUserId) {
         taskRepository.findById(taskId).ifPresent(t -> {
             String title = "Task Overdue!";
@@ -178,9 +154,6 @@ public class NotificationService {
         });
     }
 
-    /**
-     * Send notification when case deadline is approaching.
-     */
     public void notifyCaseDeadlineApproaching(Long caseId, Long ownerId, int daysRemaining) {
         caseRepository.findById(caseId).ifPresent(c -> {
             String title = "Case Deadline Approaching";
@@ -195,9 +168,6 @@ public class NotificationService {
         });
     }
 
-    /**
-     * Send notification for new message in case chat (to other members).
-     */
     public void notifyNewChatMessage(Long caseId, Long senderId, Long messageId, String messageContent, List<Long> recipientIds) {
         caseRepository.findById(caseId).ifPresent(c -> {
             String senderName = userRepository.findById(senderId).map(User::getFullName).orElse("Someone");
@@ -207,7 +177,6 @@ public class NotificationService {
             String actionUrl = String.format("/cases/%d/chat", caseId);
 
             for (Long recipientId : recipientIds) {
-                // Don't notify the sender
                 if (!recipientId.equals(senderId)) {
                     createNotification(recipientId, NotificationType.NEW_CHAT_MESSAGE, NotificationPriority.LOW,
                             title, message, caseId, null, messageId, senderId, actionUrl);
@@ -216,19 +185,12 @@ public class NotificationService {
         });
     }
 
-    /**
-     * Get notifications for a user (paginated) - returns DTOs to avoid lazy loading.
-     */
     public Page<NotificationResponse> getNotificationsForUser(Long userId, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Notification> notifications = notificationRepository.findByUserIdWithDetails(userId, pageable);
         return notifications.map(NotificationResponse::fromEntity);
     }
 
-
-    /**
-     * Get unread notifications for a user - returns DTOs to avoid lazy loading.
-     */
     public List<NotificationResponse> getUnreadNotifications(Long userId) {
         List<Notification> notifications = notificationRepository.findUnreadByUserIdWithDetails(userId);
         return notifications.stream()
@@ -236,23 +198,14 @@ public class NotificationService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Get unread notification count.
-     */
     public long getUnreadCount(Long userId) {
         return notificationRepository.countByUserIdAndStatus(userId, NotificationStatus.UNREAD);
     }
 
-    /**
-     * Mark notifications as read.
-     */
     public int markAsRead(List<Long> notificationIds, Long userId) {
         return notificationRepository.markAsRead(notificationIds, userId, LocalDateTime.now());
     }
 
-    /**
-     * Mark all notifications as read for a user.
-     */
     public int markAllAsRead(Long userId) {
         return notificationRepository.markAllAsRead(userId, LocalDateTime.now());
     }

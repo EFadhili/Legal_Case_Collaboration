@@ -103,3 +103,4 @@ public class ChatWebSocketController {
         throw new RuntimeException("Cannot authenticate user for WebSocket connection");
     }
 }
+

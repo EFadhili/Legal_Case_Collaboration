@@ -166,6 +166,13 @@
             <version>1.12.600</version>
         </dependency>
 
+        <!-- SpringDoc OpenAPI (Swagger) for API Documentation -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.6.0</version>
+        </dependency>
+
     </dependencies>
 
     <build>

@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest
 @Transactional
 @DisplayName("Notification Service Integration Tests")
-class NotificationServiceIntegrationTest {
+class ationServiceIntegrationTest {
 
     @Autowired
     private NotificationService notificationService;

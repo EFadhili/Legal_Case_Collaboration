@@ -11,6 +11,7 @@ import com.legalcase.entity.Document;
 import com.legalcase.entity.LegalCase;
 import com.legalcase.entity.User;
 import com.legalcase.enums.AIQueryType;
+import com.legalcase.exception.*;
 import com.legalcase.repository.AIInteractionRepository;
 import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.DocumentRepository;
@@ -48,7 +49,7 @@ public class AIService {
     private String geminiApiUrl;
 
     private static final int MAX_CONTEXT_DOCUMENTS = 5;
-    private static final int MAX_DOCUMENT_TEXT_LENGTH = 50000;  // 50k chars per document
+    private static final int MAX_DOCUMENT_TEXT_LENGTH = 50000;
 
     /**
      * Process an AI query with optional case and document context.
@@ -58,7 +59,7 @@ public class AIService {
         long startTime = System.currentTimeMillis();
 
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
 
         LegalCase legalCase = null;
         StringBuilder contextBuilder = new StringBuilder();
@@ -66,7 +67,7 @@ public class AIService {
         // Build context from case
         if (request.getCaseId() != null) {
             legalCase = caseRepository.findById(request.getCaseId())
-                    .orElseThrow(() -> new RuntimeException("Case not found"));
+                    .orElseThrow(() -> new ResourceNotFoundException("Case", request.getCaseId()));
 
             contextBuilder.append("Case Context:\n");
             contextBuilder.append("- Case Title: ").append(legalCase.getTitle()).append("\n");
@@ -142,14 +143,14 @@ public class AIService {
         long startTime = System.currentTimeMillis();
 
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
 
         LegalCase legalCase = null;
         String caseContext = "";
 
         if (request.getCaseId() != null) {
             legalCase = caseRepository.findById(request.getCaseId())
-                    .orElseThrow(() -> new RuntimeException("Case not found"));
+                    .orElseThrow(() -> new ResourceNotFoundException("Case", request.getCaseId()));
             caseContext = buildCaseContext(legalCase);
         }
 
@@ -177,20 +178,17 @@ public class AIService {
     private String buildPrompt(String userPrompt, String context, AIQueryType queryType) {
         StringBuilder prompt = new StringBuilder();
 
-        // System instruction
         prompt.append("You are an AI legal assistant for a Legal Case Management Platform. ");
         prompt.append("Your role is to help legal professionals analyze documents, understand cases, ");
         prompt.append("and provide general legal information. ");
         prompt.append("Always include a disclaimer that this is not legal advice.\n\n");
 
-        // Add context if available
         if (context != null && !context.isEmpty()) {
             prompt.append("CONTEXT PROVIDED:\n");
             prompt.append(context);
             prompt.append("\n");
         }
 
-        // Add specific instructions based on query type
         switch (queryType) {
             case DOCUMENT_SUMMARY:
                 prompt.append("Please provide a concise summary of the document(s) above. ");
@@ -286,13 +284,13 @@ public class AIService {
                             clientResponse -> clientResponse.bodyToMono(String.class)
                                     .flatMap(errorBody -> {
                                         log.error("Gemini API error: {}", errorBody);
-                                        return Mono.error(new RuntimeException("Gemini API error: " + errorBody));
+                                        return Mono.error(new FileProcessingException("Gemini API error: " + errorBody));
                                     }))
                     .bodyToMono(String.class)
                     .block();
 
             if (response == null) {
-                throw new RuntimeException("No response from Gemini API");
+                throw new FileProcessingException("No response from Gemini API");
             }
 
             return extractResponseText(response);
@@ -319,7 +317,6 @@ public class AIService {
         contents.add(content);
         request.put("contents", contents);
 
-        // Generation config
         Map<String, Object> generationConfig = new HashMap<>();
         generationConfig.put("temperature", 0.7);
         generationConfig.put("maxOutputTokens", 4096);
@@ -351,7 +348,6 @@ public class AIService {
     }
 
     private int estimateTokenCount(String text) {
-        // Rough estimation: ~4 characters per token for English
         return text.length() / 4;
     }
 
@@ -368,24 +364,27 @@ public class AIService {
     }
 
     /**
-     * Get AI interaction history for a user.
+     * Get AI interaction history for a user (returns DTOs).
      */
-    public List<AIInteraction> getUserHistory(Long userId, int page, int size) {
+    public List<AIInteractionResponse> getUserHistory(Long userId, int page, int size) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-        return aiInteractionRepository.findByUserWithDetails(user)
-                .stream()
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
+
+        List<AIInteraction> interactions = aiInteractionRepository.findByUserWithDetails(user);
+
+        return interactions.stream()
                 .skip((long) page * size)
                 .limit(size)
+                .map(AIInteractionResponse::fromEntity)
                 .collect(Collectors.toList());
     }
 
     /**
-     * Get AI interaction history for a case.
+     * Get AI interaction history for a case (returns DTOs).
      */
     public List<AIInteractionResponse> getCaseHistory(Long caseId) {
         LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new RuntimeException("Case not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
         List<AIInteraction> interactions = aiInteractionRepository.findByLegalCaseWithDetails(legalCase);
 
@@ -400,14 +399,14 @@ public class AIService {
     @Transactional
     public void rateInteraction(Long interactionId, Integer rating, Long userId) {
         AIInteraction interaction = aiInteractionRepository.findById(interactionId)
-                .orElseThrow(() -> new RuntimeException("Interaction not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("AI Interaction", interactionId));
 
         if (!interaction.getUser().getId().equals(userId)) {
-            throw new RuntimeException("You can only rate your own interactions");
+            throw new UnauthorizedException("You can only rate your own interactions");
         }
 
         if (rating < 1 || rating > 5) {
-            throw new RuntimeException("Rating must be between 1 and 5");
+            throw new ValidationException("rating", "Rating must be between 1 and 5");
         }
 
         interaction.setUserRating(rating);

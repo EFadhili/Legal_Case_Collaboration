@@ -4,6 +4,12 @@ import com.legalcase.dto.request.MarkNotificationsReadRequest;
 import com.legalcase.dto.response.NotificationResponse;
 import com.legalcase.security.JwtUtils;
 import com.legalcase.service.NotificationService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,19 +25,21 @@ import java.util.Map;
 @RequestMapping("/notifications")
 @RequiredArgsConstructor
 @Slf4j
+@Tag(name = "Notifications", description = "In-app notifications for user activities")
+@SecurityRequirement(name = "Bearer Authentication")
 public class NotificationController {
 
     private final NotificationService notificationService;
     private final JwtUtils jwtUtils;
 
-    /**
-     * Get notifications for current user (paginated).
-     * GET /api/notifications?page=0&size=20
-     */
+    @Operation(
+            summary = "Get notifications (paginated)",
+            description = "Returns all notifications for the current user with pagination support."
+    )
     @GetMapping
     public ResponseEntity<Page<NotificationResponse>> getNotifications(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
+            @Parameter(description = "Page number (0-indexed)") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
 
         Long userId = extractUserId(request);
@@ -39,11 +47,10 @@ public class NotificationController {
         return ResponseEntity.ok(notifications);
     }
 
-
-    /**
-     * Get unread notifications for current user.
-     * GET /api/notifications/unread
-     */
+    @Operation(
+            summary = "Get unread notifications",
+            description = "Returns all unread notifications for the current user."
+    )
     @GetMapping("/unread")
     public ResponseEntity<List<NotificationResponse>> getUnreadNotifications(HttpServletRequest request) {
         Long userId = extractUserId(request);
@@ -51,10 +58,10 @@ public class NotificationController {
         return ResponseEntity.ok(notifications);
     }
 
-    /**
-     * Get unread notification count.
-     * GET /api/notifications/unread/count
-     */
+    @Operation(
+            summary = "Get unread notification count",
+            description = "Returns the total number of unread notifications for the current user."
+    )
     @GetMapping("/unread/count")
     public ResponseEntity<Map<String, Long>> getUnreadCount(HttpServletRequest request) {
         Long userId = extractUserId(request);
@@ -65,10 +72,10 @@ public class NotificationController {
         return ResponseEntity.ok(response);
     }
 
-    /**
-     * Mark notifications as read.
-     * PUT /api/notifications/read
-     */
+    @Operation(
+            summary = "Mark notifications as read",
+            description = "Marks specific notifications as read for the current user."
+    )
     @PutMapping("/read")
     public ResponseEntity<Void> markAsRead(
             @RequestBody MarkNotificationsReadRequest request,
@@ -79,10 +86,10 @@ public class NotificationController {
         return ResponseEntity.ok().build();
     }
 
-    /**
-     * Mark all notifications as read.
-     * PUT /api/notifications/read/all
-     */
+    @Operation(
+            summary = "Mark all notifications as read",
+            description = "Marks all notifications as read for the current user."
+    )
     @PutMapping("/read/all")
     public ResponseEntity<Void> markAllAsRead(HttpServletRequest httpRequest) {
         Long userId = extractUserId(httpRequest);
