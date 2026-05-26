@@ -13,8 +13,8 @@ public class SendMessageRequest {
     @NotBlank(message = "Message content is required")
     private String content;
 
-    @NotNull(message = "Case ID is required")
-    private Long caseId;
+    @NotNull(message = "Case identifier is required")
+    private String caseIdentifier;  // Changed from caseId (Long) to caseIdentifier (String)
 
     private MessageType type = MessageType.TEXT;
 
@@ -22,8 +22,10 @@ public class SendMessageRequest {
     private String fileName;
     private Long fileSize;
 
-    // Mentions
-    private List<Long> mentionedUserIds;
-    private List<Long> mentionedTaskIds;
+    // Changed from userIds to user identifiers (usernames or emails)
+    private List<String> mentionedUserIdentifiers;
+
+    // Changed from taskIds to task identifiers (task numbers or IDs)
+    private List<String> mentionedTaskIdentifiers;
 }
 

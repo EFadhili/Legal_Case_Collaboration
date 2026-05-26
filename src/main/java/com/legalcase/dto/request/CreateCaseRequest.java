@@ -25,5 +25,5 @@ public class CreateCaseRequest {
 
     private LocalDate dueDate;
 
-    private Set<Long> assignedUserIds;
+    private Set<String> assignedUserIdentifiers;  // Changed from Set<Long> assignedUserIds
 }

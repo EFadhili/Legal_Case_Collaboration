@@ -9,5 +9,5 @@ import java.util.List;
 public class MarkMessagesReadRequest {
 
     @NotNull(message = "Message IDs are required")
-    private List<Long> messageIds;
+    private List<Long> messageIds;  // Keeps Long IDs
 }

@@ -32,6 +32,113 @@ public class TaskService {
     private final CaseMemberRepository caseMemberRepository;
     private final NotificationService notificationService;
 
+    // ============================================
+    // HELPER METHODS
+    // ============================================
+
+    private Task findTask(String identifier) {
+        if (identifier == null || identifier.trim().isEmpty()) {
+            throw new ValidationException("identifier", "Task identifier is required");
+        }
+        try {
+            Long id = Long.parseLong(identifier);
+            return findById(id);
+        } catch (NumberFormatException e) {
+            return findByTaskNumber(identifier);
+        }
+    }
+
+    private Task findById(Long id) {
+        return taskRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Task", id));
+    }
+
+    private Task findByTaskNumber(String taskNumber) {
+        return taskRepository.findByTaskNumberWithDetails(taskNumber)
+                .orElseThrow(() -> new ResourceNotFoundException("Task", "taskNumber", taskNumber));
+    }
+
+    private User findUserByIdentifier(String identifier) {
+        return userRepository.findByUsername(identifier)
+                .or(() -> userRepository.findByEmail(identifier))
+                .orElseThrow(() -> new ResourceNotFoundException("User", "username or email", identifier));
+    }
+
+    /**
+     * Verify that a user can access a task (must be case member).
+     * No special admin exemption - admins must be case members too.
+     */
+    private void verifyTaskAccess(Task task, Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
+
+        LegalCase legalCase = task.getLegalCase();
+        if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
+            throw new AccessDeniedException("You do not have access to this task. Only case members can view tasks.");
+        }
+    }
+
+    /**
+     * Verify that a user can modify a task (must be assigned user OR case lawyer).
+     */
+    private void verifyTaskModification(Task task, Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
+
+        LegalCase legalCase = task.getLegalCase();
+
+        // Check if user is a case member first
+        if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
+            throw new AccessDeniedException("You do not have access to this task. Only case members can modify tasks.");
+        }
+
+        boolean isAssignedUser = task.getAssignedTo() != null && task.getAssignedTo().getId().equals(userId);
+        boolean isCaseLawyer = caseMemberRepository.findByLegalCaseAndUser(legalCase, user)
+                .map(member -> member.getRole() == com.legalcase.enums.CaseMemberRole.LAWYER)
+                .orElse(false);
+
+        if (!isAssignedUser && !isCaseLawyer) {
+            throw new AccessDeniedException("Only the assigned user or case lawyers can modify this task");
+        }
+    }
+
+    /**
+     * Verify that a user can assign tasks (must be case lawyer).
+     */
+    private void verifyTaskAssignmentPermission(LegalCase legalCase, Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
+
+        // Check if user is a case member first
+        if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
+            throw new AccessDeniedException("You do not have access to this case. Only case members can assign tasks.");
+        }
+
+        boolean isCaseLawyer = caseMemberRepository.findByLegalCaseAndUser(legalCase, user)
+                .map(member -> member.getRole() == com.legalcase.enums.CaseMemberRole.LAWYER)
+                .orElse(false);
+
+        if (!isCaseLawyer) {
+            throw new AccessDeniedException("Only case lawyers can assign tasks");
+        }
+    }
+
+    /**
+     * Verify that a user can view case tasks (must be case member).
+     */
+    private void verifyCaseAccess(LegalCase legalCase, Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
+
+        if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
+            throw new AccessDeniedException("You do not have access to this case. Only case members can view tasks.");
+        }
+    }
+
+    // ============================================
+    // CREATE
+    // ============================================
+
     @Transactional
     public Task createTask(String title, String description, TaskType type,
                            TaskPriority priority, LocalDateTime dueDate,
@@ -50,6 +157,7 @@ public class TaskService {
         User createdBy = userRepository.findById(createdById)
                 .orElseThrow(() -> new ResourceNotFoundException("User", createdById));
 
+        // Must be a case member to create tasks
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, createdBy)) {
             throw new AccessDeniedException("Only case members can create tasks");
         }
@@ -65,10 +173,14 @@ public class TaskService {
         task.setLegalCase(legalCase);
         task.setCreatedBy(createdBy);
 
+        long taskCount = taskRepository.countByLegalCase(legalCase) + 1;
+        task.generateTaskNumber(caseId, taskCount);
+
         if (assignedToUserId != null) {
             User assignedTo = userRepository.findById(assignedToUserId)
                     .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
 
+            // Assigned user must also be a case member
             if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, assignedTo)) {
                 throw new AccessDeniedException("Assigned user must be a case member");
             }
@@ -82,117 +194,96 @@ public class TaskService {
         }
 
         Task saved = taskRepository.save(task);
-        log.info("Task created with ID: {}", saved.getId());
-
-        return findById(saved.getId());
+        log.info("Task created with ID: {}, Task Number: {}", saved.getId(), saved.getTaskNumber());
+        return saved;
     }
 
     // ============================================
-    // BASIC FIND METHODS
+    // READ (Single)
     // ============================================
 
-    public Task findById(Long id) {
-        return taskRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Task", id));
+    public Task getTask(String identifier, Long userId) {
+        Task task = findTask(identifier);
+        verifyTaskAccess(task, userId);
+        return task;
     }
 
-    public List<Task> getTasksByCase(Long caseId) {
+    // ============================================
+    // READ (Lists) - All require case membership
+    // ============================================
+
+    public List<Task> getTasksByCase(Long caseId, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
         return taskRepository.findByLegalCase(legalCase);
     }
 
-    public List<Task> getTasksByAssignedUser(Long userId) {
+    public List<Task> getTasksByAssignedUser(Long userId, Long requestingUserId) {
+        // Users can only see their own assigned tasks
+        if (!userId.equals(requestingUserId)) {
+            throw new AccessDeniedException("You can only view your own assigned tasks");
+        }
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", userId));
         return taskRepository.findByAssignedTo(user);
     }
 
-    // ============================================
-    // STATUS & TYPE & PRIORITY METHODS
-    // ============================================
+    public List<Task> getTasksByAssignedUserIdentifier(String identifier, Long requestingUserId) {
+        User targetUser = findUserByIdentifier(identifier);
 
-    public List<Task> getTasksByStatus(TaskStatus status) {
-        return taskRepository.findByStatus(status);
+        // Users can only see their own assigned tasks
+        if (!targetUser.getId().equals(requestingUserId)) {
+            throw new AccessDeniedException("You can only view your own assigned tasks");
+        }
+
+        return taskRepository.findByAssignedTo(targetUser);
     }
 
-    public List<Task> getTasksByType(TaskType type) {
-        return taskRepository.findByType(type);
-    }
+    // Global filter methods removed - no one can see tasks across all cases
+    // because that would violate case membership rules
 
-    public List<Task> getTasksByPriority(TaskPriority priority) {
-        return taskRepository.findByPriority(priority);
-    }
-
-    public List<Task> getTasksByAssignedTo(Long assignedToUserId) {
-        User assignedTo = userRepository.findById(assignedToUserId)
-                .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
-        return taskRepository.findByAssignedTo(assignedTo);
-    }
-
-    // ============================================
-    // CASE + FILTER METHODS
-    // ============================================
-
-    public List<Task> getTasksByCaseAndStatus(Long caseId, TaskStatus status) {
+    public List<Task> getTasksByCaseAndStatus(Long caseId, TaskStatus status, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
         return taskRepository.findByLegalCaseAndStatus(legalCase, status);
     }
 
-    public List<Task> getTasksByCaseAndAssignedTo(Long caseId, Long assignedToUserId) {
+    public List<Task> getTasksByCaseAndType(Long caseId, TaskType type, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
-        User assignedTo = userRepository.findById(assignedToUserId)
-                .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
-        return taskRepository.findByLegalCaseAndAssignedTo(legalCase, assignedTo);
-    }
 
-    public List<Task> getTasksByCaseAndType(Long caseId, TaskType type) {
-        LegalCase legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        verifyCaseAccess(legalCase, userId);
         return taskRepository.findByLegalCaseAndType(legalCase, type);
     }
 
-    // ============================================
-    // DUE DATE METHODS
-    // ============================================
+    public List<Task> getTasksByCaseAndAssignedToIdentifier(Long caseId, String identifier, Long userId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
-    public List<Task> getTasksByDueDate(LocalDate dueDate) {
-        return taskRepository.findByDueDate(dueDate);
+        verifyCaseAccess(legalCase, userId);
+
+        User assignedTo = findUserByIdentifier(identifier);
+        return taskRepository.findByLegalCaseAndAssignedTo(legalCase, assignedTo);
     }
 
-    public List<Task> getTasksByDueDateBefore(LocalDate date) {
-        return taskRepository.findByDueDateBefore(date);
-    }
+    public List<Task> getOverdueTasksByCase(Long caseId, Long userId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
 
-    public List<Task> getTasksByDueDateAfter(LocalDate date) {
-        return taskRepository.findByDueDateAfter(date);
-    }
-
-    public List<Task> getTasksByDueDateBetween(LocalDate startDate, LocalDate endDate) {
-        return taskRepository.findByDueDateBetween(startDate, endDate);
-    }
-
-    // ============================================
-    // OVERDUE METHODS
-    // ============================================
-
-    public List<Task> getOverdueTasksByCase(Long caseId) {
+        verifyCaseAccess(legalCase, userId);
         return taskRepository.findOverdueTasksByCaseId(caseId);
     }
 
-    public List<Task> getAllOverdueTasks() {
-        return taskRepository.findOverdueTasks();
-    }
-
-    // ============================================
-    // UNBLOCKED METHODS
-    // ============================================
-
-    public List<Task> getUnblockedTasksByCase(Long caseId) {
+    public List<Task> getUnblockedTasksByCase(Long caseId, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
         List<Task> tasks = taskRepository.findByLegalCase(legalCase);
         return tasks.stream()
                 .filter(t -> !t.isBlockedByDependency())
@@ -200,36 +291,60 @@ public class TaskService {
     }
 
     // ============================================
-    // COUNT METHODS
+    // SEARCH - Only within a case
     // ============================================
 
-    public long countTasksByCaseAndType(Long caseId, TaskType type) {
+    public List<Task> searchTasksInCase(Long caseId, String searchTerm, Long userId) {
+        if (searchTerm == null || searchTerm.trim().isEmpty()) {
+            return List.of();
+        }
+
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
+        return taskRepository.searchTasksInCaseByTitleOrNumber(caseId, searchTerm.trim());
+    }
+
+    // ============================================
+    // COUNTS - Only within a case
+    // ============================================
+
+    public long countTasksByCaseAndType(Long caseId, TaskType type, Long userId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
         return taskRepository.countByLegalCaseAndType(legalCase, type);
     }
 
-    public long countTasksByCaseAndTypeAndStatus(Long caseId, TaskType type, TaskStatus status) {
+    public long countTasksByCaseAndTypeAndStatus(Long caseId, TaskType type, TaskStatus status, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
         return taskRepository.countByLegalCaseAndTypeAndStatus(legalCase, type, status);
     }
 
-    public long countTasksByCaseAndStatus(Long caseId, TaskStatus status) {
+    public long countTasksByCaseAndStatus(Long caseId, TaskStatus status, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
         return taskRepository.countByLegalCaseAndStatus(legalCase, status);
     }
 
     // ============================================
-    // UPDATE METHODS
+    // UPDATES
     // ============================================
 
     @Transactional
-    public Task updateStatus(Long taskId, TaskStatus newStatus, Long userId) {
-        log.info("User {} updating task {} status to {}", userId, taskId, newStatus);
+    public Task updateStatus(String identifier, TaskStatus newStatus, Long userId) {
+        log.info("User {} updating task {} status to {}", userId, identifier, newStatus);
 
-        Task task = findById(taskId);
+        Task task = findTask(identifier);
+        verifyTaskModification(task, userId);
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", userId));
         LegalCase legalCase = task.getLegalCase();
@@ -238,7 +353,6 @@ public class TaskService {
             throw new InvalidStatusTransitionException("Cannot update tasks in a locked case");
         }
 
-        boolean isAdmin = user.isAdmin();
         boolean isAssignedUser = task.getAssignedTo() != null && task.getAssignedTo().getId().equals(userId);
         boolean isCaseLawyer = caseMemberRepository.findByLegalCaseAndUser(legalCase, user)
                 .map(member -> member.getRole() == com.legalcase.enums.CaseMemberRole.LAWYER)
@@ -255,12 +369,12 @@ public class TaskService {
         }
 
         if (newStatus == TaskStatus.REVIEW) {
-            if (!isAssignedUser && !isCaseLawyer && !isAdmin) {
-                throw new UnauthorizedException("Only assigned user, case lawyer, or admin can move task to REVIEW");
+            if (!isAssignedUser && !isCaseLawyer) {
+                throw new UnauthorizedException("Only assigned user or case lawyer can move task to REVIEW");
             }
         } else if (newStatus == TaskStatus.COMPLETED) {
-            if (!isCaseLawyer && !isAdmin) {
-                throw new UnauthorizedException("Only case lawyers or admins can approve and complete tasks");
+            if (!isCaseLawyer) {
+                throw new UnauthorizedException("Only case lawyers can approve and complete tasks");
             }
             task.setApprovedBy(user);
             task.setApprovedAt(LocalDateTime.now());
@@ -274,16 +388,17 @@ public class TaskService {
         }
 
         taskRepository.save(task);
-        log.info("Task {} status updated to {}", taskId, newStatus);
-
-        return findById(taskId);
+        log.info("Task {} status updated to {}", task.getTaskNumber(), newStatus);
+        return task;
     }
 
     @Transactional
-    public Task updateProgress(Long taskId, Integer progress, Long userId) {
-        log.info("User {} updating task {} progress to {}%", userId, taskId, progress);
+    public Task updateProgress(String identifier, Integer progress, Long userId) {
+        log.info("User {} updating task {} progress to {}%", userId, identifier, progress);
 
-        Task task = findById(taskId);
+        Task task = findTask(identifier);
+        verifyTaskModification(task, userId);
+
         LegalCase legalCase = task.getLegalCase();
 
         if (legalCase.isLocked()) {
@@ -291,41 +406,41 @@ public class TaskService {
         }
 
         boolean isAssignedUser = task.getAssignedTo() != null && task.getAssignedTo().getId().equals(userId);
-        boolean isAdmin = userRepository.findById(userId).map(User::isAdmin).orElse(false);
 
-        if (!isAssignedUser && !isAdmin) {
-            throw new UnauthorizedException("Only assigned user or admin can update task progress");
+        if (!isAssignedUser) {
+            throw new UnauthorizedException("Only the assigned user can update task progress");
         }
 
         task.setProgress(progress);
 
         if (progress == 100 && task.getStatus() != TaskStatus.COMPLETED) {
             task.setStatus(TaskStatus.REVIEW);
-            log.info("Task {} auto-moved to REVIEW due to 100% progress", taskId);
+            log.info("Task {} auto-moved to REVIEW due to 100% progress", task.getTaskNumber());
         } else if (progress > 0 && progress < 100 && task.getStatus() == TaskStatus.TODO) {
             task.setStatus(TaskStatus.IN_PROGRESS);
-            log.info("Task {} auto-moved to IN_PROGRESS", taskId);
+            log.info("Task {} auto-moved to IN_PROGRESS", task.getTaskNumber());
         }
 
         taskRepository.save(task);
-
-        return findById(taskId);
+        return task;
     }
 
     @Transactional
-    public Task assignTask(Long taskId, Long assignedToUserId, Long assignedByUserId) {
-        log.info("User {} assigning task {} to user {}", assignedByUserId, taskId, assignedToUserId);
+    public Task assignTaskByIdentifier(String taskIdentifier, String userIdentifier, Long assignedByUserId) {
+        log.info("User {} assigning task {} to user identified by: {}", assignedByUserId, taskIdentifier, userIdentifier);
 
-        Task task = findById(taskId);
+        Task task = findTask(taskIdentifier);
         LegalCase legalCase = task.getLegalCase();
+
+        verifyTaskAssignmentPermission(legalCase, assignedByUserId);
 
         if (legalCase.isLocked()) {
             throw new InvalidStatusTransitionException("Cannot assign tasks in a locked case");
         }
 
-        User assignedTo = userRepository.findById(assignedToUserId)
-                .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
+        User assignedTo = findUserByIdentifier(userIdentifier);
 
+        // Assigned user must be a case member
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, assignedTo)) {
             throw new AccessDeniedException("Assigned user must be a case member");
         }
@@ -333,14 +448,68 @@ public class TaskService {
         task.setAssignedTo(assignedTo);
         taskRepository.save(task);
 
-        notificationService.notifyTaskAssigned(taskId, assignedToUserId, assignedByUserId);
-        log.info("Task {} assigned to user {}", taskId, assignedToUserId);
-
-        return findById(taskId);
+        notificationService.notifyTaskAssigned(task.getId(), assignedTo.getId(), assignedByUserId);
+        log.info("Task {} assigned to user {}", task.getTaskNumber(), assignedTo.getUsername());
+        return task;
     }
 
     @Transactional
-    public void setProgressTo100OnCompletion(Long taskId) {
-        taskRepository.setProgressTo100OnCompletion(taskId);
+    public void setProgressTo100OnCompletion(String identifier, Long userId) {
+        Task task = findTask(identifier);
+        verifyTaskModification(task, userId);
+        taskRepository.setProgressTo100OnCompletion(task.getId());
+        log.info("Task {} set to 100% completion", task.getTaskNumber());
     }
+
+    @Transactional
+    public void deleteTask(String identifier, Long userId) {
+        Task task = findTask(identifier);
+        verifyTaskModification(task, userId);
+
+        LegalCase legalCase = task.getLegalCase();
+
+        if (legalCase.isLocked()) {
+            throw new InvalidStatusTransitionException("Cannot delete tasks in a locked case");
+        }
+
+        taskRepository.delete(task);
+        log.info("Task {} deleted", task.getTaskNumber());
+    }
+
+    // ============================================
+// DUE DATE METHODS (Within a case)
+// ============================================
+
+    public List<Task> getTasksByDueDate(Long caseId, LocalDate dueDate, Long userId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
+        return taskRepository.findByDueDate(dueDate);
+    }
+
+    public List<Task> getTasksByDueDateBefore(Long caseId, LocalDate date, Long userId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
+        return taskRepository.findByDueDateBefore(date);
+    }
+
+    public List<Task> getTasksByDueDateAfter(Long caseId, LocalDate date, Long userId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
+        return taskRepository.findByDueDateAfter(date);
+    }
+
+    public List<Task> getTasksByDueDateBetween(Long caseId, LocalDate startDate, LocalDate endDate, Long userId) {
+        LegalCase legalCase = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+
+        verifyCaseAccess(legalCase, userId);
+        return taskRepository.findByDueDateBetween(startDate, endDate);
+    }
+
 }

@@ -56,6 +56,13 @@ public class LegalCase {
     @Column(name = "is_locked")
     private boolean isLocked = false;
 
+    // ===== NEW SOFT DELETE FIELDS =====
+    @Column(name = "is_deleted")
+    private boolean isDeleted = false;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "owner_id", nullable = false)
     private User owner;

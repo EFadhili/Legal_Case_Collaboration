@@ -52,3 +52,4 @@ public interface AIInteractionRepository extends JpaRepository<AIInteraction, Lo
     Page<AIInteraction> findByUserWithDetailsPage(@Param("user") User user, Pageable pageable);
 
 }
+

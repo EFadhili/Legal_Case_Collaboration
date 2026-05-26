@@ -19,6 +19,8 @@ import java.util.Optional;
 @Repository
 public interface TaskRepository extends JpaRepository<Task, Long> {
 
+    long countByLegalCase(LegalCase legalCase);
+
     // ============================================
     // OVERRIDE DEFAULT METHODS WITH JOIN FETCH
     // ============================================
@@ -187,7 +189,9 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     // ============================================
 
     long countByLegalCaseAndType(LegalCase legalCase, TaskType type);
+
     long countByLegalCaseAndTypeAndStatus(LegalCase legalCase, TaskType type, TaskStatus status);
+
     long countByLegalCaseAndStatus(LegalCase legalCase, TaskStatus status);
 
     // ============================================
@@ -197,4 +201,83 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     @Modifying
     @Query("UPDATE Task t SET t.progress = 100 WHERE t.id = :taskId AND t.status = 'COMPLETED'")
     void setProgressTo100OnCompletion(@Param("taskId") Long taskId);
+
+    /**
+     * Find tasks by title containing the search term (case-insensitive).
+     * Used for task assignment autocomplete.
+     */
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE LOWER(t.title) LIKE LOWER(CONCAT('%', :searchTerm, '%'))")
+    List<Task> findByTitleContainingWithDetails(@Param("searchTerm") String searchTerm);
+
+    /**
+     * Find tasks by title containing the search term within a specific case.
+     */
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.legalCase.id = :caseId AND LOWER(t.title) LIKE LOWER(CONCAT('%', :searchTerm, '%'))")
+    List<Task> findByCaseIdAndTitleContainingWithDetails(@Param("caseId") Long caseId,
+                                                         @Param("searchTerm") String searchTerm);
+
+    /**
+     * NEW: Find task by task number (e.g., TASK-2026-00123-001)
+     * Added to support task mentions in chat using human-readable task numbers
+     * Required for Issue #2 (Task mention parsing)
+     */
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.taskNumber = :taskNumber")
+    Optional<Task> findByTaskNumberWithDetails(@Param("taskNumber") String taskNumber);
+
+    /**
+     * NEW: Find task by task number without all details (lightweight)
+     * Added for quick task existence checks
+     */
+    Optional<Task> findByTaskNumber(String taskNumber);
+
+    /**
+     * NEW: Search tasks by title or task number (for autocomplete)
+     */
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE LOWER(t.title) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
+            "OR LOWER(t.taskNumber) LIKE LOWER(CONCAT('%', :searchTerm, '%'))")
+    List<Task> searchTasksByTitleOrNumber(@Param("searchTerm") String searchTerm);
+
+    /**
+     * NEW: Search tasks within a case by title or task number
+     */
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.legalCase.id = :caseId " +
+            "AND (LOWER(t.title) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
+            "OR LOWER(t.taskNumber) LIKE LOWER(CONCAT('%', :searchTerm, '%')))")
+    List<Task> searchTasksInCaseByTitleOrNumber(@Param("caseId") Long caseId,
+                                                @Param("searchTerm") String searchTerm);
 }

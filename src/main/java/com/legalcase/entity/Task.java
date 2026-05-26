@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+import java.time.Year;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -23,6 +24,9 @@ public class Task {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "task_number", nullable = false, unique = true)
+    private String taskNumber;  // NEW - Format: TASK-2026-00001
 
     @Column(nullable = false)
     private String title;
@@ -104,5 +108,13 @@ public class Task {
     public boolean requiresApproval() {
         return this.type == TaskType.REVIEW || this.type == TaskType.MANDATORY;
     }
+
+    // Task number generation
+    public void generateTaskNumber(Long caseId, Long taskCount) {
+        int currentYear = Year.now().getValue();
+        this.taskNumber = String.format("TASK-%d-%s-%05d",
+                currentYear, caseId, taskCount);
+    }
+
 }
 

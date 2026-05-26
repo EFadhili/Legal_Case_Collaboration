@@ -1,9 +1,10 @@
 package com.legalcase.controller;
 
+import com.legalcase.dto.request.DeleteMessageRequest;
+import com.legalcase.dto.request.EditMessageRequest;
 import com.legalcase.dto.request.MarkMessagesReadRequest;
 import com.legalcase.dto.request.SendMessageRequest;
-import com.legalcase.dto.response.ChatMessageResponse;
-import com.legalcase.dto.response.UnreadCountResponse;
+import com.legalcase.dto.response.*;
 import com.legalcase.security.JwtUtils;
 import com.legalcase.service.ChatService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -34,125 +35,146 @@ public class ChatController {
     private final ChatService chatService;
     private final JwtUtils jwtUtils;
 
-    @Operation(
-            summary = "Send a message (REST)",
-            description = "Sends a message to a case chat. Supports user mentions (@username) and task mentions (#taskId)."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "201", description = "Message sent successfully"),
-            @ApiResponse(responseCode = "400", description = "Invalid request"),
-            @ApiResponse(responseCode = "403", description = "Not a case member"),
-            @ApiResponse(responseCode = "404", description = "Case not found")
-    })
+    // ============================================
+    // SEND MESSAGE
+    // ============================================
+
     @PostMapping("/messages")
     public ResponseEntity<ChatMessageResponse> sendMessage(
             @Valid @RequestBody SendMessageRequest request,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
+        String userIdentifier = extractUserIdentifier(httpRequest);
 
         var message = chatService.sendMessage(
                 request.getContent(),
                 request.getType(),
-                request.getCaseId(),
-                userId,
+                request.getCaseIdentifier(),
+                userIdentifier,
                 request.getFileUrl(),
                 request.getFileName(),
                 request.getFileSize(),
-                request.getMentionedUserIds(),
-                request.getMentionedTaskIds()
+                request.getMentionedUserIdentifiers(),
+                request.getMentionedTaskIdentifiers()
         );
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ChatMessageResponse.fromEntity(message));
     }
 
+    // ============================================
+    // DELETE MESSAGE (NEW)
+    // ============================================
+
     @Operation(
-            summary = "Get paginated messages",
-            description = "Retrieves messages for a case with pagination. Latest messages first."
+            summary = "Delete a message",
+            description = "Soft deletes a message. Permissions: Admin (any), Lawyer (any in case), Sender (within 5 minutes)"
     )
-    @GetMapping("/cases/{caseId}/messages")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Message deleted successfully"),
+            @ApiResponse(responseCode = "403", description = "Not authorized to delete this message"),
+            @ApiResponse(responseCode = "404", description = "Message not found")
+    })
+    @DeleteMapping("/messages/{messageId}")
+    public ResponseEntity<MessageDeletedResponse> deleteMessage(
+            @Parameter(description = "Message ID") @PathVariable Long messageId,
+            @RequestParam(required = false) String reason,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        MessageDeletedResponse response = chatService.deleteMessage(messageId, userIdentifier, reason);
+        return ResponseEntity.ok(response);
+    }
+
+    // ============================================
+    // GET MESSAGES
+    // ============================================
+
+    @GetMapping("/cases/{caseIdentifier}/messages")
     public ResponseEntity<Page<ChatMessageResponse>> getMessagesByCase(
-            @Parameter(description = "Case ID") @PathVariable Long caseId,
-            @Parameter(description = "Page number (0-indexed)") @RequestParam(defaultValue = "0") int page,
-            @Parameter(description = "Page size") @RequestParam(defaultValue = "50") int size,
+            @PathVariable String caseIdentifier,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        Page<ChatMessageResponse> responses = chatService.getMessagesByCase(caseId, page, size, userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        Page<ChatMessageResponse> responses = chatService.getMessagesByCase(caseIdentifier, page, size, userIdentifier);
         return ResponseEntity.ok(responses);
     }
 
-    @Operation(
-            summary = "Get all messages",
-            description = "Retrieves all messages for a case (no pagination). Used for WebSocket initial load."
-    )
-    @GetMapping("/cases/{caseId}/messages/all")
+    @GetMapping("/cases/{caseIdentifier}/messages/all")
     public ResponseEntity<List<ChatMessageResponse>> getAllMessagesByCase(
-            @Parameter(description = "Case ID") @PathVariable Long caseId,
+            @PathVariable String caseIdentifier,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        List<ChatMessageResponse> responses = chatService.getAllMessagesByCase(caseId, userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        List<ChatMessageResponse> responses = chatService.getAllMessagesByCase(caseIdentifier, userIdentifier);
         return ResponseEntity.ok(responses);
     }
 
-    @Operation(
-            summary = "Get unread messages",
-            description = "Retrieves unread messages for a user in a specific case"
-    )
-    @GetMapping("/cases/{caseId}/unread")
+    @GetMapping("/cases/{caseIdentifier}/unread")
     public ResponseEntity<List<ChatMessageResponse>> getUnreadMessagesByCase(
-            @Parameter(description = "Case ID") @PathVariable Long caseId,
+            @PathVariable String caseIdentifier,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        List<ChatMessageResponse> responses = chatService.getUnreadMessagesByCase(caseId, userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        List<ChatMessageResponse> responses = chatService.getUnreadMessagesByCase(caseIdentifier, userIdentifier);
         return ResponseEntity.ok(responses);
     }
 
-    @Operation(
-            summary = "Get unread counts",
-            description = "Returns total unread messages count and breakdown by case for the current user"
-    )
+    // ============================================
+    // UNREAD COUNTS & STATUS (ENHANCED)
+    // ============================================
+
     @GetMapping("/unread/counts")
     public ResponseEntity<UnreadCountResponse> getUnreadCounts(HttpServletRequest httpRequest) {
-        Long userId = extractUserId(httpRequest);
-        UnreadCountResponse response = chatService.getUnreadCounts(userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        UnreadCountResponse response = chatService.getUnreadCounts(userIdentifier);
         return ResponseEntity.ok(response);
     }
 
     @Operation(
-            summary = "Mark messages as read",
-            description = "Marks specific messages as read for the current user"
+            summary = "Get detailed unread status",
+            description = "Returns detailed information about cases with unread messages including case details, unread counts, and last message previews"
     )
+    @GetMapping("/unread/cases")
+    public ResponseEntity<CaseUnreadStatusResponse> getDetailedUnreadStatus(HttpServletRequest httpRequest) {
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        CaseUnreadStatusResponse response = chatService.getDetailedUnreadStatus(userIdentifier);
+        return ResponseEntity.ok(response);
+    }
+
+    // ============================================
+    // MARK MESSAGES AS READ
+    // ============================================
+
     @PutMapping("/messages/read")
     public ResponseEntity<Void> markMessagesAsRead(
             @Valid @RequestBody MarkMessagesReadRequest request,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        chatService.markMessagesAsRead(request.getMessageIds(), userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        chatService.markMessagesAsRead(request.getMessageIds(), userIdentifier);
         return ResponseEntity.ok().build();
     }
 
-    @Operation(
-            summary = "Mark all messages as read",
-            description = "Marks all messages in a case as read for the current user"
-    )
-    @PutMapping("/cases/{caseId}/read")
+    @PutMapping("/cases/{caseIdentifier}/read")
     public ResponseEntity<Void> markAllMessagesAsRead(
-            @Parameter(description = "Case ID") @PathVariable Long caseId,
+            @PathVariable String caseIdentifier,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        chatService.markAllMessagesAsReadInCase(caseId, userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        chatService.markAllMessagesAsReadInCase(caseIdentifier, userIdentifier);
         return ResponseEntity.ok().build();
     }
 
-    private Long extractUserId(HttpServletRequest request) {
+    // ============================================
+    // HELPER METHODS
+    // ============================================
+
+    private String extractUserIdentifier(HttpServletRequest request) {
         String token = extractToken(request);
-        return jwtUtils.getUserIdFromToken(token);
+        return jwtUtils.getEmailFromToken(token);
     }
 
     private String extractToken(HttpServletRequest request) {
@@ -161,5 +183,31 @@ public class ChatController {
             throw new RuntimeException("Missing or invalid Authorization header");
         }
         return authHeader.substring(7);
+    }
+
+    @Operation(
+            summary = "Edit a message",
+            description = "Partially update a message content. Permissions: Admin (any), Lawyer (any in case), Sender (within 10 minutes)"
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Message edited successfully"),
+            @ApiResponse(responseCode = "403", description = "Not authorized to edit this message"),
+            @ApiResponse(responseCode = "404", description = "Message not found"),
+            @ApiResponse(responseCode = "400", description = "Invalid request")
+    })
+    @PatchMapping("/messages/{messageId}")
+    public ResponseEntity<MessageEditedResponse> editMessage(
+            @PathVariable Long messageId,
+            @Valid @RequestBody EditMessageRequest request,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        MessageEditedResponse response = chatService.editMessage(
+                messageId,
+                request.getContent(),  // Changed from newContent
+                userIdentifier,
+                request.getReason()
+        );
+        return ResponseEntity.ok(response);
     }
 }

@@ -54,9 +54,40 @@ public class ChatMessage {
     @Column(name = "mentioned_task_ids")
     private String mentionedTaskIds;
 
+    // NEW: Soft delete fields for message deletion feature
+    @Column(name = "is_deleted", nullable = false)
+    private boolean isDeleted = false;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
+    @Column(name = "deleted_by")
+    private Long deletedBy;
+
+    @Column(name = "deleted_reason")
+    private String deletedReason;
+
     @CreatedDate
     @Column(name = "sent_at", updatable = false)
     private LocalDateTime sentAt;
+
+    @Column(name = "is_edited", nullable = false)
+    private boolean isEdited = false;
+
+    @Column(name = "edited_at")
+    private LocalDateTime editedAt;
+
+    @Column(name = "edited_by")
+    private Long editedBy;
+
+    @Column(name = "edited_by_name")
+    private String editedByName;
+
+    @Column(name = "original_content", columnDefinition = "TEXT")
+    private String originalContent;  // Store original for audit trail
+
+    @Column(name = "edit_history", columnDefinition = "TEXT")
+    private String editHistory;  // JSON string storing edit history
 
     @Column(name = "is_read")
     private boolean isRead = false;

@@ -30,10 +30,34 @@ public class ChatMessageResponse {
     private boolean isRead;
     private LocalDateTime readAt;
 
+    // NEW: Deletion fields
+    private boolean isDeleted;
+    private LocalDateTime deletedAt;
+    private Long deletedBy;
+    private String deletedReason;
+
+    // NEW: Edit fields
+    private boolean isEdited;
+    private LocalDateTime editedAt;
+    private Long editedBy;
+    private String editedByName;
+
+    private static String formatContent(ChatMessage message) {
+        if (message.isDeleted()) {
+            return "[This message was deleted]";
+        }
+
+        String content = message.getContent();
+        if (message.isEdited()) {
+            content = content + " (edited)";
+        }
+        return content;
+    }
+
     public static ChatMessageResponse fromEntity(ChatMessage message) {
         ChatMessageResponseBuilder builder = ChatMessageResponse.builder()
                 .id(message.getId())
-                .content(message.getContent())
+                .content(formatContent(message))
                 .type(message.getType())
                 .caseId(message.getLegalCase().getId())
                 .caseNumber(message.getLegalCase().getCaseNumber())
@@ -45,9 +69,17 @@ public class ChatMessageResponse {
                 .mentionedTaskIds(message.getMentionedTaskIdsAsList())
                 .sentAt(message.getSentAt())
                 .isRead(message.isRead())
-                .readAt(message.getReadAt());
+                .readAt(message.getReadAt())
+                .isDeleted(message.isDeleted())
+                .deletedAt(message.getDeletedAt())
+                .deletedBy(message.getDeletedBy())
+                .deletedReason(message.getDeletedReason())
+                .isEdited(message.isEdited())
+                .editedAt(message.getEditedAt())
+                .editedBy(message.getEditedBy())
+                .editedByName(message.getEditedByName());
 
-        if (message.getFileUrl() != null) {
+        if (message.getFileUrl() != null && !message.isDeleted()) {
             builder.fileUrl(message.getFileUrl())
                     .fileName(message.getFileName())
                     .fileSize(message.getFileSize());

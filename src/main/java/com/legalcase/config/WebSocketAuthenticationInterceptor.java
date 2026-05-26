@@ -27,20 +27,20 @@ public class WebSocketAuthenticationInterceptor implements HandshakeInterceptor 
 
         if (request instanceof ServletServerHttpRequest servletRequest) {
             String token = extractTokenFromRequest(servletRequest);
-            Long caseId = extractCaseIdFromRequest(servletRequest);
+            String caseIdentifier = extractCaseIdentifierFromRequest(servletRequest);
 
-            if (token != null && jwtUtils.validateToken(token) && caseId != null) {
-                Long userId = jwtUtils.getUserIdFromToken(token);
+            if (token != null && jwtUtils.validateToken(token) && caseIdentifier != null) {
+                String userIdentifier = jwtUtils.getEmailFromToken(token);
 
                 // Verify user is a case member BEFORE establishing WebSocket connection
-                if (chatService.canAccessCaseChat(caseId, userId)) {
-                    attributes.put("userId", userId);
-                    attributes.put("caseId", caseId);
+                if (chatService.canAccessCaseChat(caseIdentifier, userIdentifier)) {
+                    attributes.put("userIdentifier", userIdentifier);
+                    attributes.put("caseIdentifier", caseIdentifier);
                     attributes.put("token", token);
-                    log.info("WebSocket handshake authenticated for user: {} to case: {}", userId, caseId);
+                    log.info("WebSocket handshake authenticated for user: {} to case: {}", userIdentifier, caseIdentifier);
                     return true;
                 } else {
-                    log.warn("User {} is not a member of case {}, WebSocket connection denied", userId, caseId);
+                    log.warn("User {} is not a member of case {}, WebSocket connection denied", userIdentifier, caseIdentifier);
                     return false;
                 }
             }
@@ -72,17 +72,19 @@ public class WebSocketAuthenticationInterceptor implements HandshakeInterceptor 
         return null;
     }
 
-    private Long extractCaseIdFromRequest(ServletServerHttpRequest request) {
-        String caseIdParam = request.getServletRequest().getParameter("caseId");
-        if (caseIdParam != null && !caseIdParam.isEmpty()) {
-            try {
-                return Long.parseLong(caseIdParam);
-            } catch (NumberFormatException e) {
-                log.warn("Invalid caseId parameter: {}", caseIdParam);
-            }
+    private String extractCaseIdentifierFromRequest(ServletServerHttpRequest request) {
+        // Try query parameter first
+        String caseIdentifier = request.getServletRequest().getParameter("caseIdentifier");
+        if (caseIdentifier != null && !caseIdentifier.isEmpty()) {
+            return caseIdentifier;
         }
+
+        // Also try "caseId" parameter for backward compatibility
+        String caseId = request.getServletRequest().getParameter("caseId");
+        if (caseId != null && !caseId.isEmpty()) {
+            return caseId;
+        }
+
         return null;
     }
 }
-
-

@@ -1,7 +1,10 @@
 package com.legalcase.controller;
 
+import com.legalcase.dto.request.EditMessageRequest;
 import com.legalcase.dto.request.SendMessageRequest;
 import com.legalcase.dto.response.ChatMessageResponse;
+import com.legalcase.dto.response.MessageDeletedResponse;
+import com.legalcase.dto.response.MessageEditedResponse;
 import com.legalcase.entity.ChatMessage;
 import com.legalcase.security.JwtUtils;
 import com.legalcase.service.ChatService;
@@ -22,85 +25,119 @@ public class ChatWebSocketController {
     private final ChatService chatService;
     private final JwtUtils jwtUtils;
 
-    @MessageMapping("/chat/{caseId}/send")
-    @SendTo("/topic/chat/{caseId}")
+    @MessageMapping("/chat/{caseIdentifier}/send")
+    @SendTo("/topic/chat/{caseIdentifier}")
     public ChatMessageResponse sendMessage(
-            @DestinationVariable Long caseId,
+            @DestinationVariable String caseIdentifier,
             @Payload SendMessageRequest request,
             SimpMessageHeaderAccessor headerAccessor) {
 
-        log.info("WebSocket message received for case: {}", caseId);
+        log.info("WebSocket message received for case: {}", caseIdentifier);
 
-        // Extract user from JWT token
-        Long userId = extractUserId(headerAccessor);
+        String userIdentifier = extractUserIdentifier(headerAccessor);
+        String sessionCase = (String) headerAccessor.getSessionAttributes().get("caseIdentifier");
+        chatService.validateWebSocketSession(sessionCase, caseIdentifier, userIdentifier);
 
-        // Send message (service will verify membership and create notifications)
         ChatMessage message = chatService.sendMessage(
                 request.getContent(),
                 request.getType(),
-                caseId,
-                userId,
+                caseIdentifier,
+                userIdentifier,
                 request.getFileUrl(),
                 request.getFileName(),
                 request.getFileSize(),
-                request.getMentionedUserIds(),
-                request.getMentionedTaskIds()
+                request.getMentionedUserIdentifiers(),
+                request.getMentionedTaskIdentifiers()
         );
 
         return ChatMessageResponse.fromEntity(message);
     }
 
-    @MessageMapping("/chat/{caseId}/join")
-    @SendTo("/topic/chat/{caseId}/join")
-    public String joinChat(
-            @DestinationVariable Long caseId,
+    // NEW: WebSocket message deletion
+    @MessageMapping("/chat/{caseIdentifier}/delete/{messageId}")
+    @SendTo("/topic/chat/{caseIdentifier}/delete")
+    public MessageDeletedResponse deleteMessage(
+            @DestinationVariable String caseIdentifier,
+            @DestinationVariable Long messageId,
+            @Payload(required = false) String reason,
             SimpMessageHeaderAccessor headerAccessor) {
 
-        Long userId = extractUserId(headerAccessor);
+        log.info("WebSocket delete request for message: {} in case: {}", messageId, caseIdentifier);
 
-        // Verify user is a case member before allowing join
-        if (!chatService.canAccessCaseChat(caseId, userId)) {
-            log.warn("User {} denied access to case {} chat - not a member", userId, caseId);
+        String userIdentifier = extractUserIdentifier(headerAccessor);
+        String sessionCase = (String) headerAccessor.getSessionAttributes().get("caseIdentifier");
+        chatService.validateWebSocketSession(sessionCase, caseIdentifier, userIdentifier);
+
+        return chatService.deleteMessage(messageId, userIdentifier, reason);
+    }
+
+    @MessageMapping("/chat/{caseIdentifier}/join")
+    @SendTo("/topic/chat/{caseIdentifier}/join")
+    public String joinChat(
+            @DestinationVariable String caseIdentifier,
+            SimpMessageHeaderAccessor headerAccessor) {
+
+        String userIdentifier = extractUserIdentifier(headerAccessor);
+
+        if (!chatService.canAccessCaseChat(caseIdentifier, userIdentifier)) {
+            log.warn("User {} denied access to case {} chat - not a member", userIdentifier, caseIdentifier);
             return "Access denied: You are not a member of this case";
         }
 
-        log.info("User {} joined chat for case {}", userId, caseId);
+        log.info("User {} joined chat for case {}", userIdentifier, caseIdentifier);
 
-        // Store user info in session for future messages
-        headerAccessor.getSessionAttributes().put("userId", userId);
-        headerAccessor.getSessionAttributes().put("caseId", caseId);
+        headerAccessor.getSessionAttributes().put("userIdentifier", userIdentifier);
+        headerAccessor.getSessionAttributes().put("caseIdentifier", caseIdentifier);
 
-        return "User joined the chat";
+        return userIdentifier + " joined the chat";
     }
 
-    @MessageMapping("/chat/{caseId}/leave")
-    @SendTo("/topic/chat/{caseId}/leave")
+    @MessageMapping("/chat/{caseIdentifier}/leave")
+    @SendTo("/topic/chat/{caseIdentifier}/leave")
     public String leaveChat(
-            @DestinationVariable Long caseId,
+            @DestinationVariable String caseIdentifier,
             SimpMessageHeaderAccessor headerAccessor) {
 
-        Long userId = extractUserId(headerAccessor);
+        String userIdentifier = extractUserIdentifier(headerAccessor);
 
-        log.info("User {} left chat for case {}", userId, caseId);
+        headerAccessor.getSessionAttributes().remove("userIdentifier");
+        headerAccessor.getSessionAttributes().remove("caseIdentifier");
 
-        return "User left the chat";
+        log.info("User {} left chat for case {}", userIdentifier, caseIdentifier);
+
+        return userIdentifier + " left the chat";
     }
 
-    private Long extractUserId(SimpMessageHeaderAccessor headerAccessor) {
-        // Try to get from session attributes (set during join)
-        Object userIdObj = headerAccessor.getSessionAttributes().get("userId");
-        if (userIdObj != null) {
-            return (Long) userIdObj;
+    private String extractUserIdentifier(SimpMessageHeaderAccessor headerAccessor) {
+        Object userIdentifierObj = headerAccessor.getSessionAttributes().get("userIdentifier");
+        if (userIdentifierObj != null) {
+            return (String) userIdentifierObj;
         }
 
-        // Fallback: extract from Authorization header
         String authHeader = headerAccessor.getFirstNativeHeader("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
-            return jwtUtils.getUserIdFromToken(token);
+            return jwtUtils.getEmailFromToken(token);
         }
 
         throw new RuntimeException("Cannot authenticate user for WebSocket connection");
     }
-}
 
+    @MessageMapping("/chat/{caseIdentifier}/edit/{messageId}")
+    @SendTo("/topic/chat/{caseIdentifier}/edit")
+    public MessageEditedResponse editMessage(
+            @DestinationVariable String caseIdentifier,
+            @DestinationVariable Long messageId,
+            @Payload EditMessageRequest request,
+            SimpMessageHeaderAccessor headerAccessor) {
+
+        log.info("WebSocket edit request for message: {} in case: {}", messageId, caseIdentifier);
+
+        String userIdentifier = extractUserIdentifier(headerAccessor);
+        String sessionCase = (String) headerAccessor.getSessionAttributes().get("caseIdentifier");
+        chatService.validateWebSocketSession(sessionCase, caseIdentifier, userIdentifier);
+
+        return chatService.editMessage(messageId, request.getContent(), userIdentifier, request.getReason());
+    }
+
+}
