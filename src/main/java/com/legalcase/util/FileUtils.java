@@ -5,6 +5,8 @@ import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
+import com.legalcase.entity.LegalCase;
+import com.legalcase.entity.Task;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.Cell;
@@ -20,9 +22,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 import org.apache.pdfbox.Loader;
 
-
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -119,10 +118,28 @@ public class FileUtils {
     public String generateStorageFileName(String originalFilename) {
         String extension = getFileExtension(originalFilename);
         String uniqueId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        String sanitizedBase = sanitizeFilename(originalFilename.substring(0, originalFilename.lastIndexOf('.')));
+        String nameWithoutExt = originalFilename.substring(0, originalFilename.lastIndexOf('.'));
+        String sanitizedBase = sanitizeFilename(nameWithoutExt);
         return uniqueId + "_" + sanitizedBase + "." + extension;
     }
 
+    public String generateStoragePath(LegalCase legalCase, Task task, String fileName) {
+        String basePath;
+        if (legalCase != null) {
+            basePath = "cases/" + legalCase.getId();
+        } else if (task != null) {
+            basePath = "tasks/" + task.getId();
+        } else {
+            basePath = "documents";
+        }
+
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy/MM");
+        String datePath = LocalDateTime.now().format(formatter);
+
+        return basePath + "/" + datePath + "/" + fileName;
+    }
+
+    // Overloaded method for backward compatibility
     public String generateStoragePath(Long caseId, Long taskId, String fileName) {
         String basePath;
         if (caseId != null) {
@@ -139,9 +156,6 @@ public class FileUtils {
         return basePath + "/" + datePath + "/" + fileName;
     }
 
-    /**
-     * Upload file to S3.
-     */
     public String uploadToS3(MultipartFile file, String storagePath) {
         try {
             ObjectMetadata metadata = new ObjectMetadata();
@@ -167,9 +181,6 @@ public class FileUtils {
         }
     }
 
-    /**
-     * Download file from S3.
-     */
     public InputStream downloadFromS3(String storagePath) {
         try {
             S3Object s3Object = amazonS3.getObject(bucketName, storagePath);
@@ -180,24 +191,17 @@ public class FileUtils {
         }
     }
 
-    /**
-     * Generate presigned URL for temporary access (24 hours).
-     */
     public String generatePresignedUrl(String storagePath) {
         try {
-            Date expiration = new Date(System.currentTimeMillis() + 24 * 60 * 60 * 1000); // 24 hours
+            Date expiration = new Date(System.currentTimeMillis() + 24 * 60 * 60 * 1000);
             URL url = amazonS3.generatePresignedUrl(bucketName, storagePath, expiration);
             return url.toString();
         } catch (Exception e) {
             log.error("Failed to generate presigned URL: {}", e.getMessage());
-            // Fallback to direct URL
             return amazonS3.getUrl(bucketName, storagePath).toString();
         }
     }
 
-    /**
-     * Delete file from S3.
-     */
     public void deleteFromS3(String storagePath) {
         try {
             amazonS3.deleteObject(bucketName, storagePath);
@@ -208,9 +212,19 @@ public class FileUtils {
         }
     }
 
-    /**
-     * Extract text from file (works with InputStream).
-     */
+    public boolean existsInS3(String storagePath) {
+        try {
+            return amazonS3.doesObjectExist(bucketName, storagePath);
+        } catch (Exception e) {
+            log.error("Failed to check existence in S3: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    public String getBucketName() {
+        return bucketName;
+    }
+
     public String extractTextFromFile(InputStream inputStream, String extension) throws Exception {
         switch (extension.toLowerCase()) {
             case "pdf":
@@ -230,70 +244,65 @@ public class FileUtils {
         try (PDDocument document = Loader.loadPDF(inputStream.readAllBytes())) {
             PDFTextStripper stripper = new PDFTextStripper();
             String text = stripper.getText(document);
-
             if (text.length() > 5_000_000) {
                 text = text.substring(0, 5_000_000);
             }
-
             return text;
         }
     }
 
     private String extractTextFromDocx(InputStream inputStream) throws Exception {
-
         try (XWPFDocument document = new XWPFDocument(inputStream);
              XWPFWordExtractor extractor = new XWPFWordExtractor(document)) {
-
-            return extractor.getText();
+            String text = extractor.getText();
+            if (text.length() > 5_000_000) {
+                text = text.substring(0, 5_000_000);
+            }
+            return text;
         }
     }
 
     private String extractTextFromXlsx(InputStream inputStream) throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook(inputStream)) {
-
             StringBuilder text = new StringBuilder();
-
             for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
-
                 XSSFSheet sheet = workbook.getSheetAt(i);
-
                 for (Row row : sheet) {
-
                     for (Cell cell : row) {
-
                         switch (cell.getCellType()) {
-
                             case STRING:
                                 text.append(cell.getStringCellValue()).append(" ");
                                 break;
-
                             case NUMERIC:
                                 text.append(cell.getNumericCellValue()).append(" ");
                                 break;
-
                             case BOOLEAN:
                                 text.append(cell.getBooleanCellValue()).append(" ");
                                 break;
-
                             case FORMULA:
                                 text.append(cell.getCellFormula()).append(" ");
                                 break;
-
                             default:
                                 text.append(" ");
                         }
+                        if (text.length() > 5_000_000) {
+                            log.warn("Extracted text exceeded 5MB limit, truncating");
+                            return text.substring(0, 5_000_000);
+                        }
                     }
-
                     text.append("\n");
                 }
             }
-
             return text.toString();
         }
     }
 
     private String extractTextFromTxt(InputStream inputStream) throws Exception {
-        // Simple text file reading
-        return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        byte[] bytes = inputStream.readAllBytes();
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        if (text.length() > 5_000_000) {
+            text = text.substring(0, 5_000_000);
+        }
+        return text;
     }
 }

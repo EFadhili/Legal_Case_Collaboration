@@ -14,8 +14,8 @@ public class AsyncConfig {
     @Bean(name = "documentTaskExecutor")
     public Executor documentTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(5);
+        executor.setCorePoolSize(3);
+        executor.setMaxPoolSize(10);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("doc-extract-");
         executor.setWaitForTasksToCompleteOnShutdown(true);

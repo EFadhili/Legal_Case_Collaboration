@@ -40,224 +40,431 @@ public class DocumentController {
     private final DocumentProcessingService processingService;
     private final JwtUtils jwtUtils;
 
-    @Operation(
-            summary = "Upload document to case",
-            description = "Uploads a file to a specific case. Supported formats: PDF, DOCX, TXT, XLSX. Max size: 100MB."
-    )
+    // ============================================
+    // UPLOAD ENDPOINTS
+    // ============================================
+
+    @Operation(summary = "Upload document to case",
+            description = "Uploads a file to a specific case. Supports document number or case ID.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "201", description = "Document uploaded successfully"),
             @ApiResponse(responseCode = "400", description = "Invalid file type or size exceeds 100MB"),
             @ApiResponse(responseCode = "401", description = "Unauthorized"),
-            @ApiResponse(responseCode = "403", description = "Not a case member")
+            @ApiResponse(responseCode = "403", description = "Not a case member"),
+            @ApiResponse(responseCode = "404", description = "Case not found")
     })
-    @PostMapping("/case/{caseId}")
+    @PostMapping("/case/{caseIdentifier}")
     public ResponseEntity<DocumentResponse> uploadToCase(
-            @Parameter(description = "Case ID") @PathVariable Long caseId,
-            @Parameter(description = "File to upload") @RequestParam("file") MultipartFile file,
-            @Parameter(description = "Optional description") @RequestParam(required = false) String description,
-            @Parameter(description = "Optional tags (comma-separated)") @RequestParam(required = false) String tags,
+            @Parameter(description = "Case ID or Case Number (e.g., CASE-2026-00001)")
+            @PathVariable String caseIdentifier,
+            @Parameter(description = "File to upload")
+            @RequestParam("file") MultipartFile file,
+            @Parameter(description = "Optional description")
+            @RequestParam(required = false) String description,
+            @Parameter(description = "Optional tags (comma-separated)")
+            @RequestParam(required = false) String tags,
             HttpServletRequest request) {
 
-        Long userId = extractUserId(request);
-
-        Document document = documentService.uploadToCase(file, caseId, userId, description, tags);
-        String downloadUrl = documentService.getDownloadUrl(document);
-        String uploadedByName = documentService.getUserFullName(userId);
-        String uploadedByUsername = documentService.getUserUsername(userId);
+        String userIdentifier = extractUserIdentifier(request);
+        Document document = documentService.uploadToCase(file, caseIdentifier, userIdentifier, description, tags);
+        String downloadUrl = documentService.getDownloadUrl(document.getDocumentNumber(), userIdentifier);
 
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(DocumentResponse.fromEntity(document, downloadUrl, uploadedByName, uploadedByUsername));
+                .body(DocumentResponse.fromEntity(document, downloadUrl));
     }
 
-    @Operation(
-            summary = "Manually trigger text extraction",
-            description = "Triggers async text extraction for a document. Useful if automatic extraction failed."
-    )
-    @PostMapping("/{id}/process")
-    public ResponseEntity<Void> processDocument(
-            @Parameter(description = "Document ID") @PathVariable Long id,
-            HttpServletRequest httpRequest) {
-        Long userId = extractUserId(httpRequest);
-        log.info("User {} manually triggering text extraction for document: {}", userId, id);
-
-        Document document = documentService.findById(id);
-        processingService.extractTextAsync(document);
-
-        return ResponseEntity.accepted().build();
-    }
-
-    @Operation(
-            summary = "Upload document to task",
-            description = "Uploads a file to a specific task. Task must belong to a case the user is a member of."
-    )
-    @PostMapping("/task/{taskId}")
+    @Operation(summary = "Upload document to task",
+            description = "Uploads a file to a specific task. Supports task number or task ID.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Document uploaded successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid file type or size exceeds 100MB"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Not a case member"),
+            @ApiResponse(responseCode = "404", description = "Task not found")
+    })
+    @PostMapping("/task/{taskIdentifier}")
     public ResponseEntity<DocumentResponse> uploadToTask(
-            @Parameter(description = "Task ID") @PathVariable Long taskId,
-            @Parameter(description = "File to upload") @RequestParam("file") MultipartFile file,
-            @Parameter(description = "Optional description") @RequestParam(required = false) String description,
-            @Parameter(description = "Optional tags (comma-separated)") @RequestParam(required = false) String tags,
+            @Parameter(description = "Task ID or Task Number (e.g., TASK-2026-00123-001)")
+            @PathVariable String taskIdentifier,
+            @Parameter(description = "File to upload")
+            @RequestParam("file") MultipartFile file,
+            @Parameter(description = "Optional description")
+            @RequestParam(required = false) String description,
+            @Parameter(description = "Optional tags (comma-separated)")
+            @RequestParam(required = false) String tags,
             HttpServletRequest request) {
 
-        Long userId = extractUserId(request);
-
-        Document document = documentService.uploadToTask(file, taskId, userId, description, tags);
-        String downloadUrl = documentService.getDownloadUrl(document);
-        String uploadedByName = documentService.getUserFullName(userId);
-        String uploadedByUsername = documentService.getUserUsername(userId);
+        String userIdentifier = extractUserIdentifier(request);
+        Document document = documentService.uploadToTask(file, taskIdentifier, userIdentifier, description, tags);
+        String downloadUrl = documentService.getDownloadUrl(document.getDocumentNumber(), userIdentifier);
 
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(DocumentResponse.fromEntity(document, downloadUrl, uploadedByName, uploadedByUsername));
+                .body(DocumentResponse.fromEntity(document, downloadUrl));
     }
 
-    @Operation(
-            summary = "Get case documents",
-            description = "Returns all documents associated with a case."
-    )
-    @GetMapping("/case/{caseId}")
-    public ResponseEntity<List<DocumentResponse>> getCaseDocuments(@Parameter(description = "Case ID") @PathVariable Long caseId) {
-        List<Document> documents = documentService.getCaseDocuments(caseId);
+    // ============================================
+    // GET DOCUMENTS
+    // ============================================
+
+    @Operation(summary = "Get case documents",
+            description = "Returns all documents associated with a case.")
+    @GetMapping("/case/{caseIdentifier}")
+    public ResponseEntity<List<DocumentResponse>> getCaseDocuments(
+            @Parameter(description = "Case ID or Case Number")
+            @PathVariable String caseIdentifier,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        List<Document> documents = documentService.getCaseDocuments(caseIdentifier, userIdentifier);
         List<DocumentResponse> responses = documents.stream()
                 .map(doc -> DocumentResponse.fromEntity(doc,
-                        documentService.getDownloadUrl(doc),
-                        documentService.getUserFullName(doc.getUploadedById()),
-                        documentService.getUserUsername(doc.getUploadedById())))
+                        documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier)))
                 .collect(Collectors.toList());
 
         return ResponseEntity.ok(responses);
     }
 
-    @Operation(
-            summary = "Get task documents",
-            description = "Returns all documents associated with a task."
-    )
-    @GetMapping("/task/{taskId}")
-    public ResponseEntity<List<DocumentResponse>> getTaskDocuments(@Parameter(description = "Task ID") @PathVariable Long taskId) {
-        List<Document> documents = documentService.getTaskDocuments(taskId);
-        List<DocumentResponse> responses = documents.stream()
-                .map(doc -> DocumentResponse.fromEntity(doc,
-                        documentService.getDownloadUrl(doc),
-                        documentService.getUserFullName(doc.getUploadedById()),
-                        documentService.getUserUsername(doc.getUploadedById())))
-                .collect(Collectors.toList());
-
-        return ResponseEntity.ok(responses);
-    }
-
-    @Operation(
-            summary = "Get case documents (paginated)",
-            description = "Returns documents for a case with pagination support."
-    )
-    @GetMapping("/case/{caseId}/paginated")
+    @Operation(summary = "Get case documents (paginated)",
+            description = "Returns documents for a case with pagination support.")
+    @GetMapping("/case/{caseIdentifier}/paginated")
     public ResponseEntity<Page<DocumentResponse>> getCaseDocumentsPaginated(
-            @Parameter(description = "Case ID") @PathVariable Long caseId,
-            @Parameter(description = "Page number (0-indexed)") @RequestParam(defaultValue = "0") int page,
-            @Parameter(description = "Page size") @RequestParam(defaultValue = "20") int size) {
+            @Parameter(description = "Case ID or Case Number")
+            @PathVariable String caseIdentifier,
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request) {
 
+        String userIdentifier = extractUserIdentifier(request);
         Pageable pageable = PageRequest.of(page, size);
-        Page<Document> documents = documentService.getCaseDocumentsPaginated(caseId, pageable);
-        Page<DocumentResponse> responses = documents.map(doc ->
-                DocumentResponse.fromEntity(doc,
-                        documentService.getDownloadUrl(doc),
-                        documentService.getUserFullName(doc.getUploadedById()),
-                        documentService.getUserUsername(doc.getUploadedById())));
+        Page<Document> documents = documentService.getCaseDocumentsPaginated(caseIdentifier, userIdentifier, pageable);
+
+        return ResponseEntity.ok(documents.map(doc ->
+                DocumentResponse.fromEntity(doc, documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier))));
+    }
+
+    @Operation(summary = "Get task documents",
+            description = "Returns all documents associated with a task.")
+    @GetMapping("/task/{taskIdentifier}")
+    public ResponseEntity<List<DocumentResponse>> getTaskDocuments(
+            @Parameter(description = "Task ID or Task Number")
+            @PathVariable String taskIdentifier,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        List<Document> documents = documentService.getTaskDocuments(taskIdentifier, userIdentifier);
+        List<DocumentResponse> responses = documents.stream()
+                .map(doc -> DocumentResponse.fromEntity(doc,
+                        documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier)))
+                .collect(Collectors.toList());
 
         return ResponseEntity.ok(responses);
     }
 
-    @Operation(
-            summary = "Get document by ID",
-            description = "Retrieves document metadata (not the file content)."
-    )
+    @Operation(summary = "Get task documents (paginated)",
+            description = "Returns documents for a task with pagination support.")
+    @GetMapping("/task/{taskIdentifier}/paginated")
+    public ResponseEntity<Page<DocumentResponse>> getTaskDocumentsPaginated(
+            @Parameter(description = "Task ID or Task Number")
+            @PathVariable String taskIdentifier,
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Document> documents = documentService.getTaskDocumentsPaginated(taskIdentifier, userIdentifier, pageable);
+
+        return ResponseEntity.ok(documents.map(doc ->
+                DocumentResponse.fromEntity(doc, documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier))));
+    }
+
+    @Operation(summary = "Get my documents",
+            description = "Returns all documents uploaded by the current user.")
+    @GetMapping("/my")
+    public ResponseEntity<List<DocumentResponse>> getMyDocuments(HttpServletRequest request) {
+        String userIdentifier = extractUserIdentifier(request);
+        List<Document> documents = documentService.getMyDocuments(userIdentifier);
+        List<DocumentResponse> responses = documents.stream()
+                .map(doc -> DocumentResponse.fromEntity(doc,
+                        documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier)))
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(responses);
+    }
+
+    @Operation(summary = "Get my documents (paginated)",
+            description = "Returns documents uploaded by the current user with pagination.")
+    @GetMapping("/my/paginated")
+    public ResponseEntity<Page<DocumentResponse>> getMyDocumentsPaginated(
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Document> documents = documentService.getMyDocumentsPaginated(userIdentifier, pageable);
+
+        return ResponseEntity.ok(documents.map(doc ->
+                DocumentResponse.fromEntity(doc, documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier))));
+    }
+
+    // ============================================
+    // GET SINGLE DOCUMENT
+    // ============================================
+
+    @Operation(summary = "Get document by ID or document number",
+            description = "Retrieves document metadata.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Document found"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Access denied"),
             @ApiResponse(responseCode = "404", description = "Document not found")
     })
-    @GetMapping("/{id}")
-    public ResponseEntity<DocumentResponse> getDocument(@Parameter(description = "Document ID") @PathVariable Long id) {
-        Document document = documentService.findById(id);
-        String downloadUrl = documentService.getDownloadUrl(document);
-        String uploadedByName = documentService.getUserFullName(document.getUploadedById());
-        String uploadedByUsername = documentService.getUserUsername(document.getUploadedById());
+    @GetMapping("/{documentIdentifier}")
+    public ResponseEntity<DocumentResponse> getDocument(
+            @Parameter(description = "Document ID or Document Number (e.g., DOC-2026-00001)")
+            @PathVariable String documentIdentifier,
+            HttpServletRequest request) {
 
-        return ResponseEntity.ok(DocumentResponse.fromEntity(document, downloadUrl, uploadedByName, uploadedByUsername));
+        String userIdentifier = extractUserIdentifier(request);
+        Document document = documentService.findByIdentifier(documentIdentifier);
+        String downloadUrl = documentService.getDownloadUrl(document.getDocumentNumber(), userIdentifier);
+
+        return ResponseEntity.ok(DocumentResponse.fromEntity(document, downloadUrl));
     }
 
-    @Operation(
-            summary = "Download document",
-            description = "Redirects to a presigned S3 URL for temporary file access (valid for 24 hours)."
-    )
-    @GetMapping("/{id}/download")
+    // ============================================
+    // UPDATE METADATA (PATCH)
+    // ============================================
+
+    @Operation(summary = "Update document metadata",
+            description = "Updates description and tags for a document. Uses PATCH for partial update.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Metadata updated successfully"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Not authorized to update"),
+            @ApiResponse(responseCode = "404", description = "Document not found")
+    })
+    @PatchMapping("/{documentIdentifier}")
+    public ResponseEntity<DocumentResponse> updateMetadata(
+            @Parameter(description = "Document ID or Document Number")
+            @PathVariable String documentIdentifier,
+            @Valid @RequestBody UpdateDocumentMetadataRequest request,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        Document document = documentService.updateMetadata(documentIdentifier, request.getDescription(),
+                request.getTags(), userIdentifier, request.getReason());
+        String downloadUrl = documentService.getDownloadUrl(document.getDocumentNumber(), userIdentifier);
+
+        return ResponseEntity.ok(DocumentResponse.fromEntity(document, downloadUrl));
+    }
+
+    // ============================================
+    // SEARCH ENDPOINTS
+    // ============================================
+
+    @Operation(summary = "Search documents in case",
+            description = "Search documents within a specific case by document number, filename, description, or tags.")
+    @GetMapping("/case/{caseIdentifier}/search")
+    public ResponseEntity<Page<DocumentResponse>> searchInCase(
+            @Parameter(description = "Case ID or Case Number")
+            @PathVariable String caseIdentifier,
+            @Parameter(description = "Search term (partial match)")
+            @RequestParam String q,
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Document> documents = documentService.searchInCase(caseIdentifier, q, userIdentifier, pageable);
+
+        return ResponseEntity.ok(documents.map(doc ->
+                DocumentResponse.fromEntity(doc, documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier))));
+    }
+
+    @Operation(summary = "Search documents in task",
+            description = "Search documents within a specific task by document number, filename, description, or tags.")
+    @GetMapping("/task/{taskIdentifier}/search")
+    public ResponseEntity<Page<DocumentResponse>> searchInTask(
+            @Parameter(description = "Task ID or Task Number")
+            @PathVariable String taskIdentifier,
+            @Parameter(description = "Search term (partial match)")
+            @RequestParam String q,
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Document> documents = documentService.searchInTask(taskIdentifier, q, userIdentifier, pageable);
+
+        return ResponseEntity.ok(documents.map(doc ->
+                DocumentResponse.fromEntity(doc, documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier))));
+    }
+
+    @Operation(summary = "Search my documents",
+            description = "Search documents uploaded by the current user.")
+    @GetMapping("/my/search")
+    public ResponseEntity<Page<DocumentResponse>> searchMyDocuments(
+            @Parameter(description = "Search term (partial match)")
+            @RequestParam String q,
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Document> documents = documentService.searchMyDocuments(q, userIdentifier, pageable);
+
+        return ResponseEntity.ok(documents.map(doc ->
+                DocumentResponse.fromEntity(doc, documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier))));
+    }
+
+    @Operation(summary = "Admin global search",
+            description = "Search all documents in the system. Admin only.")
+    @GetMapping("/admin/search")
+    public ResponseEntity<Page<DocumentResponse>> adminGlobalSearch(
+            @Parameter(description = "Search term (partial match)")
+            @RequestParam String q,
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Document> documents = documentService.adminGlobalSearch(q, userIdentifier, pageable);
+
+        return ResponseEntity.ok(documents.map(doc ->
+                DocumentResponse.fromEntity(doc, documentService.getDownloadUrl(doc.getDocumentNumber(), userIdentifier))));
+    }
+
+    // ============================================
+    // DOWNLOAD & TEXT EXTRACTION
+    // ============================================
+
+    @Operation(summary = "Download document",
+            description = "Redirects to a presigned S3 URL for temporary file access (valid for 24 hours).")
+    @GetMapping("/{documentIdentifier}/download")
     public ResponseEntity<Void> downloadDocument(
-            @Parameter(description = "Document ID") @PathVariable Long id,
+            @Parameter(description = "Document ID or Document Number")
+            @PathVariable String documentIdentifier,
+            HttpServletRequest request,
             HttpServletResponse response) {
-        Document document = documentService.findById(id);
-        String presignedUrl = documentService.getDownloadUrl(document);
+
+        String userIdentifier = extractUserIdentifier(request);
+        String presignedUrl = documentService.getDownloadUrl(documentIdentifier, userIdentifier);
 
         return ResponseEntity.status(HttpStatus.FOUND)
                 .header("Location", presignedUrl)
                 .build();
     }
 
-    @Operation(
-            summary = "Get extracted text",
-            description = "Returns the text extracted from the document for AI analysis."
-    )
+    @Operation(summary = "Get extracted text",
+            description = "Returns the text extracted from the document for AI analysis.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Text retrieved"),
-            @ApiResponse(responseCode = "400", description = "Text extraction not yet completed")
+            @ApiResponse(responseCode = "400", description = "Text extraction not yet completed"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Access denied")
     })
-    @GetMapping("/{id}/text")
-    public ResponseEntity<String> getExtractedText(@Parameter(description = "Document ID") @PathVariable Long id) {
-        String text = documentService.getExtractedText(id);
+    @GetMapping("/{documentIdentifier}/text")
+    public ResponseEntity<String> getExtractedText(
+            @Parameter(description = "Document ID or Document Number")
+            @PathVariable String documentIdentifier,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        String text = documentService.getExtractedText(documentIdentifier, userIdentifier);
         return ResponseEntity.ok(text);
     }
 
-    @Operation(
-            summary = "Update document metadata",
-            description = "Updates description and tags for a document."
-    )
-    @PutMapping("/{id}")
-    public ResponseEntity<DocumentResponse> updateMetadata(
-            @Parameter(description = "Document ID") @PathVariable Long id,
-            @Valid @RequestBody UpdateDocumentMetadataRequest request,
-            HttpServletRequest httpRequest) {
+    @Operation(summary = "Manually trigger text extraction",
+            description = "Triggers async text extraction for a document. Useful if automatic extraction failed.")
+    @PostMapping("/{documentIdentifier}/process")
+    public ResponseEntity<Void> processDocument(
+            @Parameter(description = "Document ID or Document Number")
+            @PathVariable String documentIdentifier,
+            HttpServletRequest request) {
 
-        Document document = documentService.updateMetadata(id, request.getDescription(), request.getTags());
-        String downloadUrl = documentService.getDownloadUrl(document);
-        String uploadedByName = documentService.getUserFullName(document.getUploadedById());
-        String uploadedByUsername = documentService.getUserUsername(document.getUploadedById());
+        String userIdentifier = extractUserIdentifier(request);
+        log.info("User {} manually triggering text extraction for document: {}", userIdentifier, documentIdentifier);
 
-        return ResponseEntity.ok(DocumentResponse.fromEntity(document, downloadUrl, uploadedByName, uploadedByUsername));
+        Document document = documentService.findByIdentifier(documentIdentifier);
+        processingService.extractTextAsync(document);
+
+        return ResponseEntity.accepted().build();
     }
 
-    @Operation(
-            summary = "Soft delete document",
-            description = "Soft-deletes a document. Can be restored within 30 days."
-    )
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteDocument(@Parameter(description = "Document ID") @PathVariable Long id) {
-        documentService.softDelete(id);
+    // ============================================
+    // DELETE & RESTORE
+    // ============================================
+
+    @Operation(summary = "Soft delete document",
+            description = "Soft-deletes a document. Admin/Lawyer/Uploader can delete.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Document deleted successfully"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Not authorized to delete"),
+            @ApiResponse(responseCode = "404", description = "Document not found")
+    })
+    @DeleteMapping("/{documentIdentifier}")
+    public ResponseEntity<Void> deleteDocument(
+            @Parameter(description = "Document ID or Document Number")
+            @PathVariable String documentIdentifier,
+            @Parameter(description = "Optional reason for deletion")
+            @RequestParam(required = false) String reason,
+            HttpServletRequest request) {
+
+        String userIdentifier = extractUserIdentifier(request);
+        documentService.softDelete(documentIdentifier, userIdentifier, reason);
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(
-            summary = "Restore document",
-            description = "Restores a previously soft-deleted document."
-    )
-    @PostMapping("/{id}/restore")
-    public ResponseEntity<DocumentResponse> restoreDocument(@Parameter(description = "Document ID") @PathVariable Long id) {
-        documentService.restore(id);
-        Document document = documentService.findById(id);
-        String downloadUrl = documentService.getDownloadUrl(document);
-        String uploadedByName = documentService.getUserFullName(document.getUploadedById());
-        String uploadedByUsername = documentService.getUserUsername(document.getUploadedById());
+    @Operation(summary = "Restore document",
+            description = "Restores a previously soft-deleted document. Admin only.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Document restored successfully"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Only admins can restore documents"),
+            @ApiResponse(responseCode = "404", description = "Document not found")
+    })
+    @PostMapping("/{documentIdentifier}/restore")
+    public ResponseEntity<DocumentResponse> restoreDocument(
+            @Parameter(description = "Document ID or Document Number")
+            @PathVariable String documentIdentifier,
+            HttpServletRequest request) {
 
-        return ResponseEntity.ok(DocumentResponse.fromEntity(document, downloadUrl, uploadedByName, uploadedByUsername));
+        String userIdentifier = extractUserIdentifier(request);
+        documentService.restore(documentIdentifier, userIdentifier);
+        Document document = documentService.findByIdentifier(documentIdentifier);
+        String downloadUrl = documentService.getDownloadUrl(document.getDocumentNumber(), userIdentifier);
+
+        return ResponseEntity.ok(DocumentResponse.fromEntity(document, downloadUrl));
     }
 
-    private Long extractUserId(HttpServletRequest request) {
+    // ============================================
+    // HELPER METHODS
+    // ============================================
+
+    private String extractUserIdentifier(HttpServletRequest request) {
         String token = extractToken(request);
-        return jwtUtils.getUserIdFromToken(token);
+        return jwtUtils.getEmailFromToken(token);
     }
 
     private String extractToken(HttpServletRequest request) {

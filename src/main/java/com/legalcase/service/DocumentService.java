@@ -1,15 +1,14 @@
 package com.legalcase.service;
 
 import com.legalcase.entity.Document;
+import com.legalcase.entity.LegalCase;
+import com.legalcase.entity.Task;
 import com.legalcase.entity.User;
 import com.legalcase.enums.DocumentStatus;
+import com.legalcase.enums.Role;
 import com.legalcase.enums.TextExtractionStatus;
 import com.legalcase.exception.*;
-import com.legalcase.repository.CaseMemberRepository;
-import com.legalcase.repository.CaseRepository;
-import com.legalcase.repository.DocumentRepository;
-import com.legalcase.repository.TaskRepository;
-import com.legalcase.repository.UserRepository;
+import com.legalcase.repository.*;
 import com.legalcase.util.FileUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
+import java.time.Year;
 import java.util.List;
 
 @Service
@@ -36,56 +36,151 @@ public class DocumentService {
     private final FileUtils fileUtils;
     private final DocumentProcessingService processingService;
 
+    // ============================================
+    // HELPER METHODS
+    // ============================================
+
+    private User findUserByIdentifier(String identifier) {
+        return userRepository.findByUsername(identifier)
+                .or(() -> userRepository.findByEmail(identifier))
+                .orElseThrow(() -> new ResourceNotFoundException("User", "username or email", identifier));
+    }
+
+    private String generateDocumentNumber() {
+        String year = String.valueOf(Year.now());
+        long count = documentRepository.count() + 1;
+        return "DOC-" + year + "-" + String.format("%06d", count);
+    }
+
+    private void verifyCaseMembership(LegalCase legalCase, User user) {
+        if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
+            throw new AccessDeniedException("Only case members can access documents in this case");
+        }
+    }
+
+    private void verifyDocumentAccess(Document document, User user) {
+        boolean isAdmin = user.getRole() == Role.ADMIN;
+        boolean isLawyer = user.getRole() == Role.LAWYER;
+        boolean isUploader = document.getUploadedBy().getId().equals(user.getId());
+
+        if (isAdmin) {
+            return;
+        }
+
+        LegalCase legalCase = null;
+        if (document.getLegalCase() != null) {
+            legalCase = document.getLegalCase();
+        } else if (document.getTask() != null) {
+            legalCase = document.getTask().getLegalCase();
+        }
+
+        if (legalCase == null) {
+            throw new BusinessException("Document has no associated case");
+        }
+
+        boolean isCaseMember = caseMemberRepository.existsByLegalCaseAndUser(legalCase, user);
+
+        if (isLawyer && isCaseMember) {
+            return;
+        }
+
+        if (isUploader) {
+            return;
+        }
+
+        if (isCaseMember) {
+            return;
+        }
+
+        throw new AccessDeniedException("You don't have permission to access this document");
+    }
+
+    private void verifyDocumentDeletePermission(Document document, User user) {
+        boolean isAdmin = user.getRole() == Role.ADMIN;
+        boolean isLawyer = user.getRole() == Role.LAWYER;
+        boolean isUploader = document.getUploadedBy().getId().equals(user.getId());
+
+        if (isAdmin) {
+            return;
+        }
+
+        LegalCase legalCase = null;
+        if (document.getLegalCase() != null) {
+            legalCase = document.getLegalCase();
+        } else if (document.getTask() != null) {
+            legalCase = document.getTask().getLegalCase();
+        }
+
+        if (legalCase != null && isLawyer && caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
+            return;
+        }
+
+        if (isUploader) {
+            return;
+        }
+
+        throw new AccessDeniedException("You don't have permission to delete this document");
+    }
+
+    private void verifyDocumentUpdatePermission(Document document, User user) {
+        boolean isAdmin = user.getRole() == Role.ADMIN;
+        boolean isLawyer = user.getRole() == Role.LAWYER;
+        boolean isUploader = document.getUploadedBy().getId().equals(user.getId());
+
+        if (isAdmin || isLawyer || isUploader) {
+            return;
+        }
+
+        throw new AccessDeniedException("You don't have permission to update this document");
+    }
+
+    private LegalCase findCaseByIdentifier(String identifier) {
+        try {
+            Long id = Long.parseLong(identifier);
+            return caseRepository.findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Case", id));
+        } catch (NumberFormatException e) {
+            return caseRepository.findByCaseNumberWithDetails(identifier)
+                    .orElseThrow(() -> new ResourceNotFoundException("Case", "caseNumber", identifier));
+        }
+    }
+
+    private Task findTaskByIdentifier(String identifier) {
+        try {
+            Long id = Long.parseLong(identifier);
+            return taskRepository.findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Task", id));
+        } catch (NumberFormatException e) {
+            return taskRepository.findByTaskNumber(identifier)
+                    .orElseThrow(() -> new ResourceNotFoundException("Task", "taskNumber", identifier));
+        }
+    }
+
+    // ============================================
+    // UPLOAD DOCUMENTS
+    // ============================================
+
     @Transactional
-    public Document uploadToCase(MultipartFile file, Long caseId, Long uploadedById,
+    public Document uploadToCase(MultipartFile file, String caseIdentifier, String userIdentifier,
                                  String description, String tags) {
-        log.info("Uploading document to case: {} by user: {}", caseId, uploadedById);
+        log.info("Uploading document to case: {} by user: {}", caseIdentifier, userIdentifier);
 
-        var legalCase = caseRepository.findById(caseId)
-                .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
+        LegalCase legalCase = findCaseByIdentifier(caseIdentifier);
+        User uploader = findUserByIdentifier(userIdentifier);
 
-        var uploader = userRepository.findById(uploadedById)
-                .orElseThrow(() -> new ResourceNotFoundException("User", uploadedById));
+        verifyCaseMembership(legalCase, uploader);
+        validateAndUploadFile(file);
 
-        if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, uploader)) {
-            throw new AccessDeniedException("Only case members can upload documents");
-        }
+        String storedFileName = fileUtils.generateStorageFileName(file.getOriginalFilename());
+        String storagePath = fileUtils.generateStoragePath(legalCase, null, storedFileName);
+        fileUtils.uploadToS3(file, storagePath);
 
-        try {
-            fileUtils.validateFile(file);
-        } catch (Exception e) {
-            throw new FileProcessingException("File validation failed: " + e.getMessage());
-        }
-
-        String originalFileName = file.getOriginalFilename();
-        String extension = fileUtils.getFileExtension(originalFileName);
-        String storedFileName = fileUtils.generateStorageFileName(originalFileName);
-        String storagePath = fileUtils.generateStoragePath(caseId, null, storedFileName);
-
-        try {
-            fileUtils.uploadToS3(file, storagePath);
-        } catch (Exception e) {
-            throw new FileProcessingException("Failed to upload file to storage: " + e.getMessage());
-        }
-
-        Document document = new Document();
-        document.setFileName(storedFileName);
-        document.setOriginalFileName(originalFileName);
-        document.setFileType(file.getContentType());
-        document.setFileExtension(extension);
-        document.setFileSize(file.getSize());
-        document.setMimeType(file.getContentType());
-        document.setStoragePath(storagePath);
-        document.setStorageBucket("legalcase-documents");
-        document.setCaseId(caseId);
-        document.setUploadedById(uploadedById);
-        document.setDescription(description);
-        document.setTags(tags);
-        document.setStatus(DocumentStatus.ACTIVE);
-        document.setTextExtractionStatus(TextExtractionStatus.PENDING);
+        Document document = createDocumentEntity(file, storagePath, uploader, description, tags);
+        document.setLegalCase(legalCase);
+        document.setDocumentNumber(generateDocumentNumber());
 
         Document saved = documentRepository.save(document);
-        log.info("Document uploaded to S3 with ID: {}", saved.getId());
+        log.info("Document uploaded with ID: {}, Document Number: {}", saved.getId(), saved.getDocumentNumber());
 
         processingService.extractTextAsync(saved);
 
@@ -93,59 +188,78 @@ public class DocumentService {
     }
 
     @Transactional
-    public Document uploadToTask(MultipartFile file, Long taskId, Long uploadedById,
+    public Document uploadToTask(MultipartFile file, String taskIdentifier, String userIdentifier,
                                  String description, String tags) {
-        log.info("Uploading document to task: {} by user: {}", taskId, uploadedById);
+        log.info("Uploading document to task: {} by user: {}", taskIdentifier, userIdentifier);
 
-        var task = taskRepository.findById(taskId)
-                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId));
+        Task task = findTaskByIdentifier(taskIdentifier);
+        User uploader = findUserByIdentifier(userIdentifier);
 
-        var uploader = userRepository.findById(uploadedById)
-                .orElseThrow(() -> new ResourceNotFoundException("User", uploadedById));
+        verifyCaseMembership(task.getLegalCase(), uploader);
+        validateAndUploadFile(file);
 
-        if (!caseMemberRepository.existsByLegalCaseAndUser(task.getLegalCase(), uploader)) {
-            throw new AccessDeniedException("Only case members can upload documents");
-        }
+        String storedFileName = fileUtils.generateStorageFileName(file.getOriginalFilename());
+        String storagePath = fileUtils.generateStoragePath(null, task, storedFileName);
+        fileUtils.uploadToS3(file, storagePath);
 
+        Document document = createDocumentEntity(file, storagePath, uploader, description, tags);
+        document.setTask(task);
+        document.setLegalCase(task.getLegalCase());
+        document.setDocumentNumber(generateDocumentNumber());
+
+        Document saved = documentRepository.save(document);
+        log.info("Document uploaded with ID: {}, Document Number: {}", saved.getId(), saved.getDocumentNumber());
+
+        processingService.extractTextAsync(saved);
+
+        return saved;
+    }
+
+    private void validateAndUploadFile(MultipartFile file) {
         try {
             fileUtils.validateFile(file);
         } catch (Exception e) {
             throw new FileProcessingException("File validation failed: " + e.getMessage());
         }
+    }
 
+    private Document createDocumentEntity(MultipartFile file, String storagePath, User uploader,
+                                          String description, String tags) {
         String originalFileName = file.getOriginalFilename();
         String extension = fileUtils.getFileExtension(originalFileName);
-        String storedFileName = fileUtils.generateStorageFileName(originalFileName);
-        String storagePath = fileUtils.generateStoragePath(null, taskId, storedFileName);
-
-        try {
-            fileUtils.uploadToS3(file, storagePath);
-        } catch (Exception e) {
-            throw new FileProcessingException("Failed to upload file to storage: " + e.getMessage());
-        }
 
         Document document = new Document();
-        document.setFileName(storedFileName);
+        document.setFileName(storagePath.substring(storagePath.lastIndexOf('/') + 1));
         document.setOriginalFileName(originalFileName);
         document.setFileType(file.getContentType());
         document.setFileExtension(extension);
         document.setFileSize(file.getSize());
         document.setMimeType(file.getContentType());
         document.setStoragePath(storagePath);
-        document.setStorageBucket("legalcase-documents");
-        document.setTaskId(taskId);
-        document.setUploadedById(uploadedById);
+        document.setUploadedBy(uploader);
         document.setDescription(description);
         document.setTags(tags);
         document.setStatus(DocumentStatus.ACTIVE);
         document.setTextExtractionStatus(TextExtractionStatus.PENDING);
+        document.setVersion(1);
+        document.setLatest(true);
 
-        Document saved = documentRepository.save(document);
-        log.info("Document uploaded to S3 with ID: {}", saved.getId());
+        return document;
+    }
 
-        processingService.extractTextAsync(saved);
+    // ============================================
+    // FIND DOCUMENTS
+    // ============================================
 
-        return saved;
+    public Document findByIdentifier(String identifier) {
+        try {
+            Long id = Long.parseLong(identifier);
+            return documentRepository.findByIdAndIsDeletedFalse(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Document", id));
+        } catch (NumberFormatException e) {
+            return documentRepository.findByDocumentNumberAndIsDeletedFalse(identifier)
+                    .orElseThrow(() -> new ResourceNotFoundException("Document", "documentNumber", identifier));
+        }
     }
 
     public Document findById(Long id) {
@@ -153,58 +267,185 @@ public class DocumentService {
                 .orElseThrow(() -> new ResourceNotFoundException("Document", id));
     }
 
-    public List<Document> getCaseDocuments(Long caseId) {
-        return documentRepository.findByCaseIdAndIsDeletedFalseOrderByUploadedAtDesc(caseId);
+    // ============================================
+    // GET DOCUMENTS
+    // ============================================
+
+    public List<Document> getCaseDocuments(String caseIdentifier, String userIdentifier) {
+        LegalCase legalCase = findCaseByIdentifier(caseIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+        verifyCaseMembership(legalCase, user);
+        return documentRepository.findByLegalCaseAndIsDeletedFalseOrderByUploadedAtDesc(legalCase);
     }
 
-    public List<Document> getTaskDocuments(Long taskId) {
-        return documentRepository.findByTaskIdAndIsDeletedFalseOrderByUploadedAtDesc(taskId);
+    public Page<Document> getCaseDocumentsPaginated(String caseIdentifier, String userIdentifier, Pageable pageable) {
+        LegalCase legalCase = findCaseByIdentifier(caseIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+        verifyCaseMembership(legalCase, user);
+        return documentRepository.findByLegalCaseAndIsDeletedFalse(legalCase, pageable);
     }
 
-    public Page<Document> getCaseDocumentsPaginated(Long caseId, Pageable pageable) {
-        return documentRepository.findByCaseIdAndIsDeletedFalse(caseId, pageable);
+    public List<Document> getTaskDocuments(String taskIdentifier, String userIdentifier) {
+        Task task = findTaskByIdentifier(taskIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+        verifyCaseMembership(task.getLegalCase(), user);
+        return documentRepository.findByTaskAndIsDeletedFalseOrderByUploadedAtDesc(task);
     }
 
-    @Transactional
-    public Document updateMetadata(Long documentId, String description, String tags) {
-        Document document = findById(documentId);
+    public Page<Document> getTaskDocumentsPaginated(String taskIdentifier, String userIdentifier, Pageable pageable) {
+        Task task = findTaskByIdentifier(taskIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+        verifyCaseMembership(task.getLegalCase(), user);
+        return documentRepository.findByTaskAndIsDeletedFalse(task, pageable);
+    }
 
-        if (description != null) {
-            document.setDescription(description);
+    public List<Document> getMyDocuments(String userIdentifier) {
+        User user = findUserByIdentifier(userIdentifier);
+        return documentRepository.findByUploadedByAndIsDeletedFalseOrderByUploadedAtDesc(user);
+    }
+
+    public Page<Document> getMyDocumentsPaginated(String userIdentifier, Pageable pageable) {
+        User user = findUserByIdentifier(userIdentifier);
+        return documentRepository.findByUploadedByAndIsDeletedFalse(user, pageable);
+    }
+
+    // ============================================
+    // SEARCH METHODS
+    // ============================================
+
+    public Page<Document> searchInCase(String caseIdentifier, String searchTerm, String userIdentifier, Pageable pageable) {
+        LegalCase legalCase = findCaseByIdentifier(caseIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+        verifyCaseMembership(legalCase, user);
+        return documentRepository.searchByLegalCase(legalCase, searchTerm, pageable);
+    }
+
+    public Page<Document> searchInTask(String taskIdentifier, String searchTerm, String userIdentifier, Pageable pageable) {
+        Task task = findTaskByIdentifier(taskIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+        verifyCaseMembership(task.getLegalCase(), user);
+        return documentRepository.searchByTask(task, searchTerm, pageable);
+    }
+
+    public Page<Document> searchMyDocuments(String searchTerm, String userIdentifier, Pageable pageable) {
+        User user = findUserByIdentifier(userIdentifier);
+        return documentRepository.searchByUploadedBy(user, searchTerm, pageable);
+    }
+
+    public Page<Document> adminGlobalSearch(String searchTerm, String userIdentifier, Pageable pageable) {
+        User user = findUserByIdentifier(userIdentifier);
+        if (user.getRole() != Role.ADMIN) {
+            throw new AccessDeniedException("Only admins can perform global document search");
         }
-        if (tags != null) {
-            document.setTags(tags);
+        return documentRepository.adminGlobalSearch(searchTerm, pageable);
+    }
+
+    // ============================================
+    // UPDATE METADATA (PATCH)
+    // ============================================
+
+    @Transactional
+    public Document updateMetadata(String documentIdentifier, String description, String tags,
+                                   String userIdentifier, String reason) {
+        log.info("User {} updating document metadata: {}", userIdentifier, documentIdentifier);
+
+        Document document = findByIdentifier(documentIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+
+        verifyDocumentUpdatePermission(document, user);
+
+        LocalDateTime now = LocalDateTime.now();
+
+        String editRecord = String.format(
+                "{\"timestamp\":\"%s\",\"editedBy\":%d,\"editedByName\":\"%s\",\"oldDescription\":\"%s\",\"oldTags\":\"%s\",\"newDescription\":\"%s\",\"newTags\":\"%s\",\"reason\":\"%s\"}|",
+                now.toString(), user.getId(), user.getFullName(),
+                escapeJson(document.getDescription()), escapeJson(document.getTags()),
+                escapeJson(description), escapeJson(tags),
+                reason != null ? escapeJson(reason) : ""
+        );
+
+        documentRepository.updateMetadata(
+                document.getId(), description, tags,
+                user.getId(), user.getFullName(), now, editRecord
+        );
+
+        document = findByIdentifier(documentIdentifier);
+        log.info("Document {} metadata updated", documentIdentifier);
+
+        return document;
+    }
+
+    private String escapeJson(String text) {
+        if (text == null) return "";
+        return text.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r");
+    }
+
+    // ============================================
+    // DELETE & RESTORE
+    // ============================================
+
+    @Transactional
+    public void softDelete(String documentIdentifier, String userIdentifier, String reason) {
+        log.info("User {} deleting document: {}", userIdentifier, documentIdentifier);
+
+        Document document = findByIdentifier(documentIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+
+        verifyDocumentDeletePermission(document, user);
+
+        documentRepository.softDelete(document.getId(), LocalDateTime.now(), user.getId());
+        log.info("Document {} soft deleted", documentIdentifier);
+    }
+
+    @Transactional
+    public void restore(String documentIdentifier, String userIdentifier) {
+        log.info("User {} restoring document: {}", userIdentifier, documentIdentifier);
+
+        User user = findUserByIdentifier(userIdentifier);
+
+        if (user.getRole() != Role.ADMIN) {
+            throw new AccessDeniedException("Only admins can restore documents");
         }
 
-        return documentRepository.save(document);
+        Document document = findByIdentifier(documentIdentifier);
+        documentRepository.restore(document.getId());
+        log.info("Document {} restored", documentIdentifier);
     }
 
     @Transactional
-    public void softDelete(Long documentId) {
-        Document document = findById(documentId);
-        documentRepository.softDelete(documentId, LocalDateTime.now());
-        log.info("Document {} soft deleted", documentId);
-    }
+    public void permanentlyDelete(String documentIdentifier, String userIdentifier) {
+        log.info("User {} permanently deleting document: {}", userIdentifier, documentIdentifier);
 
-    @Transactional
-    public void restore(Long documentId) {
-        documentRepository.restore(documentId);
-        log.info("Document {} restored", documentId);
-    }
+        User user = findUserByIdentifier(userIdentifier);
 
-    @Transactional
-    public void permanentlyDelete(Long documentId) {
-        Document document = findById(documentId);
+        if (user.getRole() != Role.ADMIN) {
+            throw new AccessDeniedException("Only admins can permanently delete documents");
+        }
+
+        Document document = findByIdentifier(documentIdentifier);
+
         try {
             fileUtils.deleteFromS3(document.getStoragePath());
         } catch (Exception e) {
             throw new FileProcessingException("Failed to delete file from S3: " + e.getMessage());
         }
-        documentRepository.deleteById(documentId);
-        log.info("Document {} permanently deleted from S3 and database", documentId);
+
+        documentRepository.deleteById(document.getId());
+        log.info("Document {} permanently deleted", documentIdentifier);
     }
 
-    public String getDownloadUrl(Document document) {
+    // ============================================
+    // DOWNLOAD & TEXT
+    // ============================================
+
+    public String getDownloadUrl(String documentIdentifier, String userIdentifier) {
+        Document document = findByIdentifier(documentIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+        verifyDocumentAccess(document, user);
+
         try {
             return fileUtils.generatePresignedUrl(document.getStoragePath());
         } catch (Exception e) {
@@ -212,23 +453,14 @@ public class DocumentService {
         }
     }
 
-    public String getExtractedText(Long documentId) {
-        Document document = findById(documentId);
+    public String getExtractedText(String documentIdentifier, String userIdentifier) {
+        Document document = findByIdentifier(documentIdentifier);
+        User user = findUserByIdentifier(userIdentifier);
+        verifyDocumentAccess(document, user);
+
         if (document.getExtractedText() == null) {
-            throw new BusinessException("Text extraction not yet completed for document: " + documentId);
+            throw new BusinessException("Text extraction not yet completed for document: " + documentIdentifier);
         }
         return document.getExtractedText();
-    }
-
-    public String getUserFullName(Long userId) {
-        return userRepository.findById(userId)
-                .map(User::getFullName)
-                .orElse("Unknown");
-    }
-
-    public String getUserUsername(Long userId) {
-        return userRepository.findById(userId)
-                .map(User::getUsername)
-                .orElse("unknown");
     }
 }

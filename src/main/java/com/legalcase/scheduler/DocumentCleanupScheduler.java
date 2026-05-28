@@ -32,15 +32,23 @@ public class DocumentCleanupScheduler {
         var documents = documentRepository.findByIsDeletedTrueAndDeletedAtBefore(thirtyDaysAgo);
 
         int deletedCount = 0;
+        int failedCount = 0;
+
         for (var document : documents) {
             try {
-                documentService.permanentlyDelete(document.getId());
+                // Use "system" as the user identifier for automated cleanup
+                // The service method expects documentIdentifier (can be ID or document number) and userIdentifier
+                documentService.permanentlyDelete(document.getDocumentNumber(), "system");
                 deletedCount++;
+                log.debug("Permanently deleted document: {} ({})",
+                        document.getDocumentNumber(), document.getOriginalFileName());
             } catch (Exception e) {
-                log.error("Failed to permanently delete document {}: {}", document.getId(), e.getMessage());
+                failedCount++;
+                log.error("Failed to permanently delete document {}: {}",
+                        document.getDocumentNumber(), e.getMessage());
             }
         }
 
-        log.info("Document cleanup completed. Permanently deleted {} documents.", deletedCount);
+        log.info("Document cleanup completed. Permanently deleted: {}, Failed: {}", deletedCount, failedCount);
     }
 }

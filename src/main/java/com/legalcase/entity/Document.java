@@ -22,6 +22,10 @@ public class Document {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // Document number for user-friendly identification (e.g., DOC-2026-00001)
+    @Column(name = "document_number", unique = true, nullable = false)
+    private String documentNumber;
+
     // File metadata
     @Column(name = "file_name", nullable = false)
     private String fileName;
@@ -48,16 +52,19 @@ public class Document {
     @Column(name = "storage_bucket")
     private String storageBucket;
 
-    // Associations (exactly one of these is non-null)
-    @Column(name = "case_id")
-    private Long caseId;
+    // Proper JPA relationships (changed from Long IDs)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "case_id")
+    private LegalCase legalCase;
 
-    @Column(name = "task_id")
-    private Long taskId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "task_id")
+    private Task task;
 
     // Upload information
-    @Column(name = "uploaded_by_id", nullable = false)
-    private Long uploadedById;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "uploaded_by_id", nullable = false)
+    private User uploadedBy;
 
     @CreatedDate
     @Column(name = "uploaded_at", updatable = false)
@@ -89,8 +96,9 @@ public class Document {
     // Versioning
     private Integer version = 1;
 
-    @Column(name = "parent_document_id")
-    private Long parentDocumentId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_document_id")
+    private Document parentDocument;
 
     @Column(name = "is_latest")
     private boolean isLatest = true;
@@ -103,11 +111,34 @@ public class Document {
     @Enumerated(EnumType.STRING)
     private DocumentStatus status = DocumentStatus.ACTIVE;
 
+    // Soft delete
     @Column(name = "is_deleted")
     private boolean isDeleted = false;
 
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
+
+    @Column(name = "deleted_by")
+    private Long deletedBy;
+
+    @Column(name = "deleted_reason")
+    private String deletedReason;
+
+    // Edit tracking for metadata
+    @Column(name = "is_edited")
+    private boolean isEdited = false;
+
+    @Column(name = "last_edited_by_id")
+    private Long lastEditedById;
+
+    @Column(name = "last_edited_by_name")
+    private String lastEditedByName;
+
+    @Column(name = "last_edited_at")
+    private LocalDateTime lastEditedAt;
+
+    @Column(name = "edit_history", columnDefinition = "TEXT")
+    private String editHistory;
 
     // Audit
     @CreatedDate
@@ -137,10 +168,17 @@ public class Document {
     }
 
     public boolean isCaseDocument() {
-        return caseId != null;
+        return legalCase != null;
     }
 
     public boolean isTaskDocument() {
-        return taskId != null;
+        return task != null;
+    }
+
+    public String getDisplayFileName() {
+        if (isDeleted) {
+            return "[Deleted] " + originalFileName;
+        }
+        return originalFileName;
     }
 }
