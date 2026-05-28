@@ -43,55 +43,125 @@ public class CommentResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    // Permissions
+    // Permissions (to be set by controller based on user role)
     private boolean canEdit;
     private boolean canDelete;
 
-    public static CommentResponse fromEntity(Comment comment, Long currentUserId, boolean isAdmin) {
+    // Edit tracking
+    private boolean isEdited;
+    private LocalDateTime editedAt;
+    private Long editedBy;
+    private String editedByName;
+
+    // Deletion status (for admins/lawyers)
+    private boolean isDeleted;
+    private LocalDateTime deletedAt;
+    private Long deletedBy;
+    private String deletedReason;
+
+    public static CommentResponse fromEntity(Comment comment, String username, boolean isAdmin, boolean isLawyer, Long caseIdForContext) {
+
+        // Safely get case information - check for null before accessing
+        Long caseId = null;
+        String caseNumber = null;
+        String caseTitle = null;
+
+        if (comment.getLegalCase() != null) {
+            caseId = comment.getLegalCase().getId();
+            caseNumber = comment.getLegalCase().getCaseNumber();
+            caseTitle = comment.getLegalCase().getTitle();
+        } else if (comment.getTask() != null && comment.getTask().getLegalCase() != null) {
+            caseId = comment.getTask().getLegalCase().getId();
+            caseNumber = comment.getTask().getLegalCase().getCaseNumber();
+            caseTitle = comment.getTask().getLegalCase().getTitle();
+        }
+
+        // Safely get task info
+        Long taskId = null;
+        String taskTitle = null;
+        if (comment.getTask() != null) {
+            taskId = comment.getTask().getId();
+            taskTitle = comment.getTask().getTitle();
+        }
+
+        // Safely get parent comment ID
+        Long parentCommentId = null;
+        if (comment.getParentComment() != null) {
+            parentCommentId = comment.getParentComment().getId();
+        }
+
+        // Safely get author info (should never be null but check anyway)
+        Long authorId = null;
+        String authorUsername = null;
+        String authorName = null;
+        String authorEmail = null;
+        if (comment.getAuthor() != null) {
+            authorId = comment.getAuthor().getId();
+            authorUsername = comment.getAuthor().getUsername();
+            authorName = comment.getAuthor().getFullName();
+            authorEmail = comment.getAuthor().getEmail();
+        }
+
+        // Determine permissions based on user role and authorship
+        boolean isAuthor = false;
+        if (comment.getAuthor() != null && username != null) {
+            isAuthor = comment.getAuthor().getUsername().equals(username);
+        }
+
+        boolean canEdit = isAdmin || isLawyer || isAuthor;
+        boolean canDelete = isAdmin || isLawyer || isAuthor;
+
+        // For deleted comments, only admins and lawyers can see content
+        String displayContent = comment.getDisplayContent();
+        if (comment.isDeleted() && !isAdmin && !isLawyer) {
+            displayContent = "[This comment was deleted]";
+        }
+
         CommentResponseBuilder builder = CommentResponse.builder()
                 .id(comment.getId())
-                .content(comment.getContent())
+                .content(displayContent)
                 .type(comment.getType())
-                .authorId(comment.getAuthor().getId())
-                .authorUsername(comment.getAuthor().getUsername())
-                .authorName(comment.getAuthor().getFullName())
-                .authorEmail(comment.getAuthor().getEmail())
+                .authorId(authorId)
+                .authorUsername(authorUsername)
+                .authorName(authorName)
+                .authorEmail(authorEmail)
+                .caseId(caseId)
+                .caseNumber(caseNumber)
+                .caseTitle(caseTitle)
+                .taskId(taskId)
+                .taskTitle(taskTitle)
+                .parentCommentId(parentCommentId)
                 .createdAt(comment.getCreatedAt())
                 .updatedAt(comment.getUpdatedAt())
-                .canEdit(comment.getAuthor().getId().equals(currentUserId) || isAdmin)
-                .canDelete(comment.getAuthor().getId().equals(currentUserId) || isAdmin);
+                .canEdit(canEdit)
+                .canDelete(canDelete)
+                .isEdited(comment.isEdited())
+                .editedAt(comment.getEditedAt())
+                .editedBy(comment.getEditedBy())
+                .editedByName(comment.getEditedByName())
+                .isDeleted(comment.isDeleted())
+                .deletedAt(comment.getDeletedAt())
+                .deletedBy(comment.getDeletedBy())
+                .deletedReason(comment.getDeletedReason());
 
-        // Add parent comment info if this is a reply
-        if (comment.getParentComment() != null) {
-            builder.parentCommentId(comment.getParentComment().getId());
-        }
-
-        // Add case info if this is a case comment
-        if (comment.getLegalCase() != null) {
-            builder.caseId(comment.getLegalCase().getId())
-                    .caseNumber(comment.getLegalCase().getCaseNumber())
-                    .caseTitle(comment.getLegalCase().getTitle());
-        }
-
-        // Add task info if this is a task comment
-        if (comment.getTask() != null) {
-            builder.taskId(comment.getTask().getId())
-                    .taskTitle(comment.getTask().getTitle());
-        }
-
-        // Add replies if any
+        // Add replies if any (only if they are fetched and not null)
         if (comment.getReplies() != null && !comment.getReplies().isEmpty()) {
             builder.replies(comment.getReplies().stream()
-                    .map(reply -> fromEntity(reply, currentUserId, isAdmin))
+                    .filter(reply -> !reply.isDeleted() || isAdmin || isLawyer)
+                    .map(reply -> fromEntity(reply, username, isAdmin, isLawyer, caseIdForContext))
                     .collect(Collectors.toList()));
         }
 
-        // Parse mentioned usernames
+        // Parse mentioned usernames (convert IDs back to usernames for display)
         if (comment.hasMentions()) {
-            List<String> usernames = comment.getMentionedUserIds().stream()
+            // For display, we show the IDs as strings (simpler)
+            // In production, you might want to fetch actual usernames
+            List<String> identifiers = comment.getMentionedUserIds().stream()
                     .map(String::valueOf)
                     .collect(Collectors.toList());
-            builder.mentionedUsernames(usernames);
+            builder.mentionedUsernames(identifiers);
+        } else {
+            builder.mentionedUsernames(List.of());
         }
 
         return builder.build();

@@ -1,5 +1,7 @@
 package com.legalcase.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
 import com.legalcase.enums.CommentType;
 import jakarta.persistence.*;
 import lombok.Data;
@@ -48,14 +50,48 @@ public class Comment {
     // For threaded replies (self-referential relationship)
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "parent_comment_id")
+    @JsonBackReference
     private Comment parentComment;
 
     @OneToMany(mappedBy = "parentComment", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonManagedReference
     private List<Comment> replies = new ArrayList<>();
 
     // Store mentioned user IDs as comma-separated string (e.g., "5,12,23")
     @Column(name = "mentions")
     private String mentions;
+
+    // Soft delete fields
+    @Column(name = "is_deleted", nullable = false)
+    private boolean isDeleted = false;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
+    @Column(name = "deleted_by")
+    private Long deletedBy;
+
+    @Column(name = "deleted_reason")
+    private String deletedReason;
+
+    // Edit tracking fields
+    @Column(name = "is_edited", nullable = false)
+    private boolean isEdited = false;
+
+    @Column(name = "edited_at")
+    private LocalDateTime editedAt;
+
+    @Column(name = "edited_by")
+    private Long editedBy;
+
+    @Column(name = "edited_by_name")
+    private String editedByName;
+
+    @Column(name = "original_content", columnDefinition = "TEXT")
+    private String originalContent;
+
+    @Column(name = "edit_history", columnDefinition = "TEXT")
+    private String editHistory;
 
     @CreatedDate
     @Column(name = "created_at", updatable = false)
@@ -101,6 +137,19 @@ public class Comment {
         }
         return userIds;
     }
+
+    /**
+     * Get display content (handles deleted and edited status)
+     */
+    public String getDisplayContent() {
+        if (isDeleted) {
+            return "[This comment was deleted]";
+        }
+
+        String displayContent = content;
+        if (isEdited) {
+            displayContent = displayContent + " (edited)";
+        }
+        return displayContent;
+    }
 }
-
-
