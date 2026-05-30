@@ -64,10 +64,6 @@ public class TaskService {
                 .orElseThrow(() -> new ResourceNotFoundException("User", "username or email", identifier));
     }
 
-    /**
-     * Verify that a user can access a task (must be case member).
-     * No special admin exemption - admins must be case members too.
-     */
     private void verifyTaskAccess(Task task, Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", userId));
@@ -78,16 +74,12 @@ public class TaskService {
         }
     }
 
-    /**
-     * Verify that a user can modify a task (must be assigned user OR case lawyer).
-     */
     private void verifyTaskModification(Task task, Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", userId));
 
         LegalCase legalCase = task.getLegalCase();
 
-        // Check if user is a case member first
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
             throw new AccessDeniedException("You do not have access to this task. Only case members can modify tasks.");
         }
@@ -102,14 +94,10 @@ public class TaskService {
         }
     }
 
-    /**
-     * Verify that a user can assign tasks (must be case lawyer).
-     */
     private void verifyTaskAssignmentPermission(LegalCase legalCase, Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", userId));
 
-        // Check if user is a case member first
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
             throw new AccessDeniedException("You do not have access to this case. Only case members can assign tasks.");
         }
@@ -123,9 +111,6 @@ public class TaskService {
         }
     }
 
-    /**
-     * Verify that a user can view case tasks (must be case member).
-     */
     private void verifyCaseAccess(LegalCase legalCase, Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", userId));
@@ -157,7 +142,6 @@ public class TaskService {
         User createdBy = userRepository.findById(createdById)
                 .orElseThrow(() -> new ResourceNotFoundException("User", createdById));
 
-        // Must be a case member to create tasks
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, createdBy)) {
             throw new AccessDeniedException("Only case members can create tasks");
         }
@@ -180,7 +164,6 @@ public class TaskService {
             User assignedTo = userRepository.findById(assignedToUserId)
                     .orElseThrow(() -> new ResourceNotFoundException("User", assignedToUserId));
 
-            // Assigned user must also be a case member
             if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, assignedTo)) {
                 throw new AccessDeniedException("Assigned user must be a case member");
             }
@@ -195,6 +178,12 @@ public class TaskService {
 
         Task saved = taskRepository.save(task);
         log.info("Task created with ID: {}, Task Number: {}", saved.getId(), saved.getTaskNumber());
+
+        // Send notification if task is assigned
+        if (assignedToUserId != null) {
+            notificationService.notifyTaskAssigned(saved.getId(), assignedToUserId, createdById);
+        }
+
         return saved;
     }
 
@@ -209,7 +198,7 @@ public class TaskService {
     }
 
     // ============================================
-    // READ (Lists) - All require case membership
+    // READ (Lists)
     // ============================================
 
     public List<Task> getTasksByCase(Long caseId, Long userId) {
@@ -221,7 +210,6 @@ public class TaskService {
     }
 
     public List<Task> getTasksByAssignedUser(Long userId, Long requestingUserId) {
-        // Users can only see their own assigned tasks
         if (!userId.equals(requestingUserId)) {
             throw new AccessDeniedException("You can only view your own assigned tasks");
         }
@@ -234,16 +222,12 @@ public class TaskService {
     public List<Task> getTasksByAssignedUserIdentifier(String identifier, Long requestingUserId) {
         User targetUser = findUserByIdentifier(identifier);
 
-        // Users can only see their own assigned tasks
         if (!targetUser.getId().equals(requestingUserId)) {
             throw new AccessDeniedException("You can only view your own assigned tasks");
         }
 
         return taskRepository.findByAssignedTo(targetUser);
     }
-
-    // Global filter methods removed - no one can see tasks across all cases
-    // because that would violate case membership rules
 
     public List<Task> getTasksByCaseAndStatus(Long caseId, TaskStatus status, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
@@ -291,7 +275,7 @@ public class TaskService {
     }
 
     // ============================================
-    // SEARCH - Only within a case
+    // SEARCH
     // ============================================
 
     public List<Task> searchTasksInCase(Long caseId, String searchTerm, Long userId) {
@@ -307,7 +291,7 @@ public class TaskService {
     }
 
     // ============================================
-    // COUNTS - Only within a case
+    // COUNTS
     // ============================================
 
     public long countTasksByCaseAndType(Long caseId, TaskType type, Long userId) {
@@ -379,6 +363,17 @@ public class TaskService {
             task.setApprovedBy(user);
             task.setApprovedAt(LocalDateTime.now());
             task.setProgress(100);
+
+            // Notify task creator and case owner about completion
+            notificationService.notifyTaskCompleted(task.getId(), userId);
+
+            // Notify tasks that depend on this task
+            List<Task> dependentTasks = taskRepository.findByDependsOnId(task.getId());
+            for (Task dependentTask : dependentTasks) {
+                if (dependentTask.getAssignedTo() != null && dependentTask.getStatus() == TaskStatus.TODO) {
+                    notificationService.notifyTaskDependencyMet(dependentTask.getId(), dependentTask.getAssignedTo().getId());
+                }
+            }
         }
 
         task.setStatus(newStatus);
@@ -440,7 +435,6 @@ public class TaskService {
 
         User assignedTo = findUserByIdentifier(userIdentifier);
 
-        // Assigned user must be a case member
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, assignedTo)) {
             throw new AccessDeniedException("Assigned user must be a case member");
         }
@@ -477,8 +471,8 @@ public class TaskService {
     }
 
     // ============================================
-// DUE DATE METHODS (Within a case)
-// ============================================
+    // DUE DATE METHODS
+    // ============================================
 
     public List<Task> getTasksByDueDate(Long caseId, LocalDate dueDate, Long userId) {
         LegalCase legalCase = caseRepository.findById(caseId)
@@ -512,4 +506,51 @@ public class TaskService {
         return taskRepository.findByDueDateBetween(startDate, endDate);
     }
 
+    // ============================================
+    // SCHEDULER METHODS FOR NOTIFICATIONS
+    // ============================================
+
+    @Transactional
+    public void checkDeadlineApproachingTasks() {
+        LocalDate today = LocalDate.now();
+        LocalDate threeDaysFromNow = today.plusDays(3);
+
+        List<Task> tasksDueSoon = taskRepository.findByDueDateBetween(today, threeDaysFromNow);
+
+        int notifiedCount = 0;
+        for (Task task : tasksDueSoon) {
+            if (task.getAssignedTo() != null && task.getStatus() != TaskStatus.COMPLETED) {
+                int daysRemaining = (int) java.time.temporal.ChronoUnit.DAYS.between(today, task.getDueDate());
+                // Only notify if days remaining is positive and task not completed
+                if (daysRemaining > 0 && daysRemaining <= 3) {
+                    notificationService.notifyTaskDeadlineApproaching(task.getId(), task.getAssignedTo().getId(), daysRemaining);
+                    notifiedCount++;
+                    log.debug("Notified about task deadline: {} (due in {} days)", task.getTaskNumber(), daysRemaining);
+                }
+            }
+        }
+
+        if (notifiedCount > 0) {
+            log.info("Sent {} deadline approaching notifications", notifiedCount);
+        }
+    }
+
+    @Transactional
+    public void checkOverdueTasks() {
+        LocalDate today = LocalDate.now();
+        List<Task> overdueTasks = taskRepository.findByDueDateBefore(today);
+
+        int notifiedCount = 0;
+        for (Task task : overdueTasks) {
+            if (task.getAssignedTo() != null && task.getStatus() != TaskStatus.COMPLETED) {
+                notificationService.notifyTaskOverdue(task.getId(), task.getAssignedTo().getId());
+                notifiedCount++;
+                log.debug("Notified about overdue task: {}", task.getTaskNumber());
+            }
+        }
+
+        if (notifiedCount > 0) {
+            log.info("Sent {} overdue task notifications", notifiedCount);
+        }
+    }
 }

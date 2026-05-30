@@ -52,13 +52,16 @@ public class Notification {
     private Long taskId;
     private String taskTitle;
 
-    private Long messageId;  // For chat message references
+    private Long commentId;     // For comment references
+    private Long messageId;      // For chat message references
+    private Long documentId;     // For document references
+    private Long interactionId;  // For AI interaction references
 
-    private Long actorId;    // Who performed the action
+    private Long actorId;        // Who performed the action
     private String actorName;
 
     @Column(name = "action_url")
-    private String actionUrl;  // Link to navigate to the relevant item
+    private String actionUrl;    // Link to navigate to the relevant item
 
     @CreatedDate
     @Column(name = "created_at", updatable = false)
@@ -67,8 +70,16 @@ public class Notification {
     @Column(name = "read_at")
     private LocalDateTime readAt;
 
+    @Column(name = "archived_at")
+    private LocalDateTime archivedAt;
+
     public void markAsRead() {
         this.status = NotificationStatus.READ;
         this.readAt = LocalDateTime.now();
+    }
+
+    public void markAsArchived() {
+        this.status = NotificationStatus.ARCHIVED;
+        this.archivedAt = LocalDateTime.now();
     }
 }

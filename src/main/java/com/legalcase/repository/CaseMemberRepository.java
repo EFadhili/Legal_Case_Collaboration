@@ -49,4 +49,7 @@ public interface CaseMemberRepository extends JpaRepository<CaseMember, Long> {
             "WHERE cm.legalCase = :legalCase AND cm.role = :role")
     List<CaseMember> findByLegalCaseAndRoleWithDetails(@Param("legalCase") LegalCase legalCase,
                                                        @Param("role") CaseMemberRole role);
+
+    @Query("SELECT CASE WHEN COUNT(cm) > 0 THEN true ELSE false END FROM CaseMember cm WHERE cm.legalCase.id = :caseId AND cm.user.id = :userId")
+    boolean existsByLegalCaseIdAndUserId(@Param("caseId") Long caseId, @Param("userId") Long userId);
 }

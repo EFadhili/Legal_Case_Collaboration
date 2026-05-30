@@ -6,6 +6,7 @@ import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
@@ -22,6 +23,9 @@ public class AIInteraction {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "interaction_number", unique = true, nullable = false)
+    private String interactionNumber;  // AI-2026-00001
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
@@ -49,7 +53,7 @@ public class AIInteraction {
     private String contextDocumentIds;  // Comma-separated document IDs used as context
 
     @Column(name = "model_used")
-    private String modelUsed = "gemini-1.5-pro";
+    private String modelUsed = "gemini-2.5-flash";
 
     @Column(name = "token_count_input")
     private Integer tokenCountInput;
@@ -66,9 +70,36 @@ public class AIInteraction {
     @Column(name = "user_rating")
     private Integer userRating;  // 1-5 stars for feedback
 
+    // Soft delete fields
+    @Column(name = "is_deleted")
+    private boolean isDeleted = false;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
+    @Column(name = "deleted_by")
+    private Long deletedBy;
+
+    @Column(name = "deleted_reason")
+    private String deletedReason;
+
+    // Edit tracking for rating
+    @Column(name = "rating_updated_at")
+    private LocalDateTime ratingUpdatedAt;
+
+    @Column(name = "rating_updated_by")
+    private Long ratingUpdatedBy;
+
+    @Column(name = "rating_history", columnDefinition = "TEXT")
+    private String ratingHistory;  // JSON array of rating changes
+
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
+
+    @LastModifiedDate
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
 
     // Helper methods
     public Set<Long> getContextDocumentIdsSet() {
@@ -88,10 +119,15 @@ public class AIInteraction {
         } else {
             this.contextDocumentIds = documentIds.stream()
                     .map(String::valueOf)
-                    .reduce((a, b) -> a + "," + b)
-                    .orElse("");
+                    .collect(java.util.stream.Collectors.joining(","));
         }
     }
-}
 
+    public String getDisplayContent() {
+        if (isDeleted) {
+            return "[This interaction was deleted]";
+        }
+        return userPrompt.length() > 100 ? userPrompt.substring(0, 100) + "..." : userPrompt;
+    }
+}
 

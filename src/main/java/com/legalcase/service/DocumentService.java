@@ -21,6 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.time.LocalDateTime;
 import java.time.Year;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -35,6 +36,7 @@ public class DocumentService {
     private final CaseMemberRepository caseMemberRepository;
     private final FileUtils fileUtils;
     private final DocumentProcessingService processingService;
+    private final NotificationService notificationService;
 
     // ============================================
     // HELPER METHODS
@@ -182,6 +184,16 @@ public class DocumentService {
         Document saved = documentRepository.save(document);
         log.info("Document uploaded with ID: {}, Document Number: {}", saved.getId(), saved.getDocumentNumber());
 
+        // Notify all case members about document upload
+        List<Long> memberIds = caseMemberRepository.findByLegalCase(legalCase).stream()
+                .map(cm -> cm.getUser().getId())
+                .filter(id -> !id.equals(uploader.getId()))
+                .collect(Collectors.toList());
+
+        if (!memberIds.isEmpty()) {
+            notificationService.notifyDocumentUploaded(saved.getId(), legalCase.getId(), null, uploader.getId(), memberIds);
+        }
+
         processingService.extractTextAsync(saved);
 
         return saved;
@@ -209,6 +221,16 @@ public class DocumentService {
 
         Document saved = documentRepository.save(document);
         log.info("Document uploaded with ID: {}, Document Number: {}", saved.getId(), saved.getDocumentNumber());
+
+        // Notify task assignee and case members about document upload
+        List<Long> memberIds = caseMemberRepository.findByLegalCase(task.getLegalCase()).stream()
+                .map(cm -> cm.getUser().getId())
+                .filter(id -> !id.equals(uploader.getId()))
+                .collect(Collectors.toList());
+
+        if (!memberIds.isEmpty()) {
+            notificationService.notifyDocumentUploaded(saved.getId(), task.getLegalCase().getId(), task.getId(), uploader.getId(), memberIds);
+        }
 
         processingService.extractTextAsync(saved);
 

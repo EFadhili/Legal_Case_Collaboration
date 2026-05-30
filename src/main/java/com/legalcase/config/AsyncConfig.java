@@ -34,4 +34,20 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    @Configuration
+    @EnableAsync
+    public class AsyncEventConfig {
+
+        @Bean(name = "eventTaskExecutor")
+        public Executor eventTaskExecutor() {
+            ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+            executor.setCorePoolSize(5);
+            executor.setMaxPoolSize(10);
+            executor.setQueueCapacity(100);
+            executor.setThreadNamePrefix("event-");
+            executor.initialize();
+            return executor;
+        }
+    }
 }

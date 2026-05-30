@@ -1,7 +1,7 @@
 package com.legalcase.config;
 
 import com.legalcase.security.JwtUtils;
-import com.legalcase.service.ChatService;
+import com.legalcase.service.WebSocketAuthService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.server.ServerHttpRequest;
@@ -19,7 +19,7 @@ import java.util.Map;
 public class WebSocketAuthenticationInterceptor implements HandshakeInterceptor {
 
     private final JwtUtils jwtUtils;
-    private final ChatService chatService;
+    private final WebSocketAuthService webSocketAuthService;  // Changed from ChatService
 
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
@@ -33,7 +33,7 @@ public class WebSocketAuthenticationInterceptor implements HandshakeInterceptor 
                 String userIdentifier = jwtUtils.getEmailFromToken(token);
 
                 // Verify user is a case member BEFORE establishing WebSocket connection
-                if (chatService.canAccessCaseChat(caseIdentifier, userIdentifier)) {
+                if (webSocketAuthService.canAccessCaseChat(caseIdentifier, userIdentifier)) {
                     attributes.put("userIdentifier", userIdentifier);
                     attributes.put("caseIdentifier", caseIdentifier);
                     attributes.put("token", token);

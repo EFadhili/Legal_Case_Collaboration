@@ -2,6 +2,7 @@ package com.legalcase.controller;
 
 import com.legalcase.dto.request.AIConversationRequest;
 import com.legalcase.dto.request.AIQueryRequest;
+import com.legalcase.dto.request.RateInteractionRequest;
 import com.legalcase.dto.response.AIInteractionResponse;
 import com.legalcase.dto.response.AIResponse;
 import com.legalcase.security.JwtUtils;
@@ -16,11 +17,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -34,117 +37,190 @@ public class AIController {
     private final AIService aiService;
     private final JwtUtils jwtUtils;
 
-    @Operation(
-            summary = "Ask a question to the AI assistant",
-            description = "Sends a prompt to Google Gemini AI with optional case and document context. Supports document analysis, summarization, clause extraction, risk analysis, and contract review."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "AI response generated successfully"),
-            @ApiResponse(responseCode = "400", description = "Invalid request format"),
-            @ApiResponse(responseCode = "401", description = "Unauthorized - Invalid or missing token"),
-            @ApiResponse(responseCode = "429", description = "Rate limit exceeded - Too many requests"),
-            @ApiResponse(responseCode = "500", description = "Gemini API error or internal server error")
-    })
+    // ============================================
+    // QUERY ENDPOINTS
+    // ============================================
+
+    @Operation(summary = "Ask a question to the AI assistant")
     @PostMapping("/query")
     public ResponseEntity<AIResponse> query(
             @Valid @RequestBody AIQueryRequest request,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        AIResponse response = aiService.processQuery(request, userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        AIResponse response = aiService.processQuery(request, userIdentifier);
         return ResponseEntity.ok(response);
     }
 
-    @Operation(
-            summary = "Multi-turn conversation with AI",
-            description = "Continues a conversation with AI, maintaining chat history. Useful for follow-up questions and iterative analysis."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "AI response generated successfully"),
-            @ApiResponse(responseCode = "400", description = "Invalid request format"),
-            @ApiResponse(responseCode = "401", description = "Unauthorized"),
-            @ApiResponse(responseCode = "429", description = "Rate limit exceeded")
-    })
+    @Operation(summary = "Multi-turn conversation with AI")
     @PostMapping("/conversation")
     public ResponseEntity<AIResponse> conversation(
             @Valid @RequestBody AIConversationRequest request,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        AIResponse response = aiService.processConversation(request, userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        AIResponse response = aiService.processConversation(request, userIdentifier);
         return ResponseEntity.ok(response);
     }
 
-    @Operation(
-            summary = "Get AI interaction history",
-            description = "Returns the current user's previous AI queries and responses. Useful for revisiting past analyses."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "History retrieved successfully"),
-            @ApiResponse(responseCode = "401", description = "Unauthorized")
-    })
+    // ============================================
+    // GET HISTORY ENDPOINTS
+    // ============================================
+
+    @Operation(summary = "Get AI interaction history", description = "Returns the current user's previous AI queries")
     @GetMapping("/history")
-    public ResponseEntity<Map<String, Object>> getHistory(
+    public ResponseEntity<Page<AIInteractionResponse>> getHistory(
             @Parameter(description = "Page number (0-indexed)") @RequestParam(defaultValue = "0") int page,
             @Parameter(description = "Number of items per page") @RequestParam(defaultValue = "20") int size,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        List<AIInteractionResponse> interactions = aiService.getUserHistory(userId, page, size);
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("interactions", interactions);
-        response.put("page", page);
-        response.put("size", size);
-        response.put("total", interactions.size());
-
-        return ResponseEntity.ok(response);
-    }
-
-    @Operation(
-            summary = "Get AI history for a specific case",
-            description = "Returns all AI interactions related to a specific case. Useful for case-specific context."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "History retrieved successfully"),
-            @ApiResponse(responseCode = "401", description = "Unauthorized"),
-            @ApiResponse(responseCode = "404", description = "Case not found")
-    })
-    @GetMapping("/case/{caseId}/history")
-    public ResponseEntity<List<AIInteractionResponse>> getCaseHistory(
-            @Parameter(description = "Case ID") @PathVariable Long caseId,
-            HttpServletRequest httpRequest) {
-
-        extractUserId(httpRequest);
-        List<AIInteractionResponse> interactions = aiService.getCaseHistory(caseId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<AIInteractionResponse> interactions = aiService.getUserHistory(userIdentifier, pageable);
         return ResponseEntity.ok(interactions);
     }
 
-    @Operation(
-            summary = "Rate an AI interaction",
-            description = "Provides feedback on AI response quality. Rating from 1 to 5 stars. Helps improve the AI assistant."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Rating submitted successfully"),
-            @ApiResponse(responseCode = "400", description = "Invalid rating value (must be 1-5)"),
-            @ApiResponse(responseCode = "401", description = "Unauthorized"),
-            @ApiResponse(responseCode = "403", description = "Cannot rate another user's interaction"),
-            @ApiResponse(responseCode = "404", description = "Interaction not found")
-    })
-    @PostMapping("/rate/{interactionId}")
-    public ResponseEntity<Void> rateInteraction(
-            @Parameter(description = "AI Interaction ID") @PathVariable Long interactionId,
-            @Parameter(description = "Rating (1-5 stars)") @RequestParam int rating,
+    @Operation(summary = "Get AI history for a specific case")
+    @GetMapping("/case/{caseIdentifier}/history")
+    public ResponseEntity<?> getCaseHistory(
+            @Parameter(description = "Case ID or Case Number") @PathVariable String caseIdentifier,
             HttpServletRequest httpRequest) {
 
-        Long userId = extractUserId(httpRequest);
-        aiService.rateInteraction(interactionId, rating, userId);
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        var interactions = aiService.getCaseHistory(caseIdentifier, userIdentifier);
+        return ResponseEntity.ok(interactions);
+    }
+
+    // ============================================
+    // GET SINGLE INTERACTION
+    // ============================================
+
+    @Operation(summary = "Get AI interaction by ID or interaction number")
+    @GetMapping("/{identifier}")
+    public ResponseEntity<AIInteractionResponse> getInteraction(
+            @Parameter(description = "Interaction ID or Number (e.g., AI-2026-00001)")
+            @PathVariable String identifier,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        var interaction = aiService.findByIdentifier(identifier, userIdentifier);
+        return ResponseEntity.ok(AIInteractionResponse.fromEntity(interaction));
+    }
+
+    // ============================================
+    // SEARCH ENDPOINTS
+    // ============================================
+
+    @Operation(summary = "Search my AI interactions")
+    @GetMapping("/search")
+    public ResponseEntity<Page<AIInteractionResponse>> searchMyHistory(
+            @Parameter(description = "Search term") @RequestParam String q,
+            @Parameter(description = "Page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<AIInteractionResponse> results = aiService.searchUserHistory(userIdentifier, q, pageable);
+        return ResponseEntity.ok(results);
+    }
+
+    @Operation(summary = "Search AI interactions in a case")
+    @GetMapping("/case/{caseIdentifier}/search")
+    public ResponseEntity<Page<AIInteractionResponse>> searchCaseHistory(
+            @Parameter(description = "Case ID or Case Number") @PathVariable String caseIdentifier,
+            @Parameter(description = "Search term") @RequestParam String q,
+            @Parameter(description = "Page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<AIInteractionResponse> results = aiService.searchCaseHistory(caseIdentifier, userIdentifier, q, pageable);
+        return ResponseEntity.ok(results);
+    }
+
+    @Operation(summary = "Admin global search", description = "Search all AI interactions in the system. Admin only.")
+    @GetMapping("/admin/search")
+    public ResponseEntity<Page<AIInteractionResponse>> adminGlobalSearch(
+            @Parameter(description = "Search term") @RequestParam String q,
+            @Parameter(description = "Page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        Pageable pageable = PageRequest.of(page, size);
+        Page<AIInteractionResponse> results = aiService.adminGlobalSearch(userIdentifier, q, pageable);
+        return ResponseEntity.ok(results);
+    }
+
+    // ============================================
+    // RATING ENDPOINT (PATCH)
+    // ============================================
+
+    @Operation(summary = "Rate an AI interaction", description = "Provides feedback on AI response quality. Rating from 1 to 5 stars.")
+    @PatchMapping("/{identifier}/rating")
+    public ResponseEntity<Void> rateInteraction(
+            @Parameter(description = "Interaction ID or Number") @PathVariable String identifier,
+            @Valid @RequestBody RateInteractionRequest request,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        aiService.rateInteraction(identifier, request.getRating(), userIdentifier, request.getReason());
         return ResponseEntity.ok().build();
     }
 
-    private Long extractUserId(HttpServletRequest request) {
+    // ============================================
+    // SOFT DELETE & RESTORE
+    // ============================================
+
+    @Operation(summary = "Soft delete AI interaction", description = "Soft-deletes an AI interaction. Admin or owner can delete.")
+    @DeleteMapping("/{identifier}")
+    public ResponseEntity<Void> deleteInteraction(
+            @Parameter(description = "Interaction ID or Number") @PathVariable String identifier,
+            @RequestParam(required = false) String reason,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        aiService.softDelete(identifier, userIdentifier, reason);
+        return ResponseEntity.noContent().build();
+    }
+
+    @Operation(summary = "Restore AI interaction", description = "Restores a previously soft-deleted interaction. Admin only.")
+    @PostMapping("/{identifier}/restore")
+    public ResponseEntity<AIInteractionResponse> restoreInteraction(
+            @Parameter(description = "Interaction ID or Number") @PathVariable String identifier,
+            HttpServletRequest httpRequest) {
+
+        String userIdentifier = extractUserIdentifier(httpRequest);
+        aiService.restore(identifier, userIdentifier);
+        var interaction = aiService.findByIdentifier(identifier, userIdentifier);
+        return ResponseEntity.ok(AIInteractionResponse.fromEntity(interaction));
+    }
+
+    // ============================================
+    // STATISTICS
+    // ============================================
+
+    @Operation(summary = "Get AI usage statistics", description = "Returns average rating and total interaction count")
+    @GetMapping("/stats")
+    public ResponseEntity<Map<String, Object>> getStats(HttpServletRequest httpRequest) {
+        String userIdentifier = extractUserIdentifier(httpRequest);
+
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("averageRating", aiService.getAverageRating(userIdentifier));
+        stats.put("totalInteractions", aiService.getTotalInteractionsCount(userIdentifier));
+
+        return ResponseEntity.ok(stats);
+    }
+
+    // ============================================
+    // HELPER METHODS
+    // ============================================
+
+    private String extractUserIdentifier(HttpServletRequest request) {
         String token = extractToken(request);
-        return jwtUtils.getUserIdFromToken(token);
+        return jwtUtils.getEmailFromToken(token);
     }
 
     private String extractToken(HttpServletRequest request) {
@@ -155,3 +231,4 @@ public class AIController {
         return authHeader.substring(7);
     }
 }
+

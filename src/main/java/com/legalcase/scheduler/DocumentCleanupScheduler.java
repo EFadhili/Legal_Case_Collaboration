@@ -1,5 +1,6 @@
 package com.legalcase.scheduler;
 
+import com.legalcase.repository.AIInteractionRepository;
 import com.legalcase.repository.DocumentRepository;
 import com.legalcase.service.DocumentService;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +19,7 @@ public class DocumentCleanupScheduler {
 
     private final DocumentRepository documentRepository;
     private final DocumentService documentService;
+    private final AIInteractionRepository aiInteractionRepository;
 
     /**
      * Run daily at 2 AM to permanently delete documents soft-deleted over 30 days ago.
@@ -50,5 +52,16 @@ public class DocumentCleanupScheduler {
         }
 
         log.info("Document cleanup completed. Permanently deleted: {}, Failed: {}", deletedCount, failedCount);
+    }
+
+    @Scheduled(cron = "0 0 3 * * *")  // Run daily at 3 AM
+    public void cleanupOldAiInteractions() {
+        LocalDateTime thirtyDaysAgo = LocalDateTime.now().minusDays(30);
+        var interactions = aiInteractionRepository.findByIsDeletedTrueAndDeletedAtBefore(thirtyDaysAgo);
+
+        for (var interaction : interactions) {
+            aiInteractionRepository.deleteById(interaction.getId());
+            log.info("Permanently deleted AI interaction: {}", interaction.getInteractionNumber());
+        }
     }
 }

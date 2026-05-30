@@ -251,6 +251,30 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
      */
     Optional<Task> findByTaskNumber(String taskNumber);
 
+    // ============================================
+// DEPENDENCY METHODS
+// ============================================
+
+    /**
+     * Find all tasks that depend on a given task (where dependsOn.id = taskId)
+     */
+    @Query("SELECT t FROM Task t WHERE t.dependsOn.id = :taskId")
+    List<Task> findByDependsOnId(@Param("taskId") Long taskId);
+
+    /**
+     * Find all tasks that depend on a given task with details fetched
+     */
+    @Query("SELECT DISTINCT t FROM Task t " +
+            "LEFT JOIN FETCH t.createdBy " +
+            "LEFT JOIN FETCH t.assignedTo " +
+            "LEFT JOIN FETCH t.approvedBy " +
+            "LEFT JOIN FETCH t.dependsOn " +
+            "LEFT JOIN FETCH t.legalCase c " +
+            "LEFT JOIN FETCH c.owner " +
+            "WHERE t.dependsOn.id = :taskId")
+    List<Task> findByDependsOnIdWithDetails(@Param("taskId") Long taskId);
+
+
     /**
      * NEW: Search tasks by title or task number (for autocomplete)
      */
@@ -264,6 +288,8 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
             "WHERE LOWER(t.title) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
             "OR LOWER(t.taskNumber) LIKE LOWER(CONCAT('%', :searchTerm, '%'))")
     List<Task> searchTasksByTitleOrNumber(@Param("searchTerm") String searchTerm);
+
+
 
     /**
      * NEW: Search tasks within a case by title or task number

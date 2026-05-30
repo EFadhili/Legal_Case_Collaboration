@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 public class AIResponse {
 
     private Long interactionId;
+    private String interactionNumber;
     private String answer;
     private AIQueryType queryType;
     private String modelUsed;
@@ -19,10 +20,12 @@ public class AIResponse {
     private Long processingTimeMs;
     private LocalDateTime timestamp;
     private String disclaimer;
+    private boolean streamSupported;
 
     public static AIResponse fromEntity(AIInteraction interaction) {
         return AIResponse.builder()
                 .interactionId(interaction.getId())
+                .interactionNumber(interaction.getInteractionNumber())
                 .answer(interaction.getAiResponse())
                 .queryType(interaction.getQueryType())
                 .modelUsed(interaction.getModelUsed())
@@ -30,6 +33,7 @@ public class AIResponse {
                 .processingTimeMs(interaction.getProcessingTimeMs())
                 .timestamp(interaction.getCreatedAt())
                 .disclaimer(getDisclaimer())
+                .streamSupported(true)
                 .build();
     }
 

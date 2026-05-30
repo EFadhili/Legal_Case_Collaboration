@@ -513,6 +513,11 @@ public class CaseService {
             throw new InvalidStatusTransitionException("Cannot remove the case owner");
         }
 
+        User adminUser = findUserByIdentifier(adminUserIdentifier);
+
+        // ADD THIS: Send notification before deleting
+        notificationService.notifyUserRemovedFromCase(userToRemove.getId(), legalCase.getId(), adminUser.getId());
+
         caseMemberRepository.deleteByLegalCaseAndUser(legalCase, userToRemove);
     }
 

@@ -17,15 +17,34 @@ import java.util.List;
 @Repository
 public interface NotificationRepository extends JpaRepository<Notification, Long> {
 
-    // ===== EXISTING METHODS =====
+    // ===== FIND METHODS WITH ENTITY GRAPH =====
 
-    Page<Notification> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
+    @Query("SELECT DISTINCT n FROM Notification n " +
+            "LEFT JOIN FETCH n.user " +
+            "WHERE n.user.id = :userId " +
+            "ORDER BY n.createdAt DESC")
+    Page<Notification> findByUserIdWithDetails(@Param("userId") Long userId, Pageable pageable);
 
-    List<Notification> findByUserIdAndStatusOrderByCreatedAtDesc(Long userId, NotificationStatus status);
+    @Query("SELECT DISTINCT n FROM Notification n " +
+            "LEFT JOIN FETCH n.user " +
+            "WHERE n.user.id = :userId AND n.status = 'UNREAD' " +
+            "ORDER BY n.createdAt DESC")
+    List<Notification> findUnreadByUserIdWithDetails(@Param("userId") Long userId);
 
-    long countByUserIdAndStatus(Long userId, NotificationStatus status);
+    @Query("SELECT DISTINCT n FROM Notification n " +
+            "LEFT JOIN FETCH n.user " +
+            "WHERE n.user.id = :userId AND n.status = 'ARCHIVED' " +
+            "ORDER BY n.createdAt DESC")
+    Page<Notification> findArchivedByUserIdWithDetails(@Param("userId") Long userId, Pageable pageable);
 
-    List<Notification> findByUserIdAndType(Long userId, NotificationType type);
+    // ===== COUNT METHODS =====
+
+    long countByUserIdAndStatus(@Param("userId") Long userId, @Param("status") NotificationStatus status);
+
+    @Query("SELECT COUNT(n) FROM Notification n WHERE n.user.id = :userId AND n.status = 'UNREAD' AND n.priority = 'URGENT'")
+    long countUrgentUnreadByUserId(@Param("userId") Long userId);
+
+    // ===== MARK AS READ/ARCHIVED =====
 
     @Modifying
     @Query("UPDATE Notification n SET n.status = 'READ', n.readAt = :readAt WHERE n.id IN :notificationIds AND n.user.id = :userId")
@@ -38,26 +57,28 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     int markAllAsRead(@Param("userId") Long userId, @Param("readAt") LocalDateTime readAt);
 
     @Modifying
-    @Query("DELETE FROM Notification n WHERE n.createdAt < :cutoffDate AND n.status = 'READ'")
-    int deleteOldReadNotifications(@Param("cutoffDate") LocalDateTime cutoffDate);
+    @Query("UPDATE Notification n SET n.status = 'ARCHIVED', n.archivedAt = :archivedAt WHERE n.id IN :notificationIds AND n.user.id = :userId")
+    int archive(@Param("notificationIds") List<Long> notificationIds,
+                @Param("userId") Long userId,
+                @Param("archivedAt") LocalDateTime archivedAt);
 
-    // ===== NEW JOIN FETCH METHODS (Prevent LazyInitializationException) =====
+    // ===== DELETE METHODS =====
 
-    /**
-     * Get paginated notifications for a user with all associations initialized
-     */
-    @Query("SELECT DISTINCT n FROM Notification n " +
-            "LEFT JOIN FETCH n.user " +
-            "WHERE n.user.id = :userId " +
-            "ORDER BY n.createdAt DESC")
-    Page<Notification> findByUserIdWithDetails(@Param("userId") Long userId, Pageable pageable);
+    @Modifying
+    @Query("DELETE FROM Notification n WHERE n.id IN :notificationIds AND n.user.id = :userId")
+    int deleteByIds(@Param("notificationIds") List<Long> notificationIds, @Param("userId") Long userId);
 
-    /**
-     * Get unread notifications for a user with associations initialized
-     */
-    @Query("SELECT DISTINCT n FROM Notification n " +
-            "LEFT JOIN FETCH n.user " +
-            "WHERE n.user.id = :userId AND n.status = 'UNREAD' " +
-            "ORDER BY n.createdAt DESC")
-    List<Notification> findUnreadByUserIdWithDetails(@Param("userId") Long userId);
+    @Modifying
+    @Query("DELETE FROM Notification n WHERE n.createdAt < :cutoffDate AND (n.status = 'READ' OR n.status = 'ARCHIVED')")
+    int deleteOldReadAndArchivedNotifications(@Param("cutoffDate") LocalDateTime cutoffDate);
+
+    // ===== BULK OPERATIONS FOR CLEANUP =====
+
+    @Modifying
+    @Query("DELETE FROM Notification n WHERE n.caseId = :caseId")
+    int deleteByCaseId(@Param("caseId") Long caseId);
+
+    @Modifying
+    @Query("DELETE FROM Notification n WHERE n.taskId = :taskId")
+    int deleteByTaskId(@Param("taskId") Long taskId);
 }

@@ -33,6 +33,7 @@ public class CommentService {
     private final TaskRepository taskRepository;
     private final UserRepository userRepository;
     private final CaseMemberRepository caseMemberRepository;
+    private final NotificationService notificationService;
 
     // ============================================
     // HELPER METHODS
@@ -92,8 +93,8 @@ public class CommentService {
         comment.setAuthor(author);
 
         // Process mentions - support usernames
+        List<Long> mentionedUserIds = new ArrayList<>();
         if (mentionedUsernames != null && !mentionedUsernames.isEmpty()) {
-            List<Long> mentionedUserIds = new ArrayList<>();
             for (String mentionedUsername : mentionedUsernames) {
                 try {
                     User mentionedUser = findUserByIdentifier(mentionedUsername);
@@ -152,6 +153,17 @@ public class CommentService {
 
             Comment saved = commentRepository.save(comment);
             log.info("Reply created with ID: {} (inherited type: {})", saved.getId(), inheritedType);
+
+            // Notify parent comment author about reply
+            if (parentComment.getAuthor() != null && !parentComment.getAuthor().getId().equals(authorId)) {
+                notificationService.notifyCommentReply(
+                        parentComment.getAuthor().getId(),
+                        saved.getId(),
+                        legalCase.getId(),
+                        authorId
+                );
+            }
+
             return saved;
         }
 
@@ -174,6 +186,30 @@ public class CommentService {
             verifyCaseMembership(legalCase, author);
             comment.setLegalCase(legalCase);
             log.info("Creating new case comment for case ID: {}", caseId);
+
+            Comment saved = commentRepository.save(comment);
+
+            // Notify all case members about new comment
+            List<Long> memberIds = caseMemberRepository.findByLegalCase(legalCase).stream()
+                    .map(cm -> cm.getUser().getId())
+                    .filter(id -> !id.equals(authorId))
+                    .collect(Collectors.toList());
+
+            if (!memberIds.isEmpty()) {
+                notificationService.notifyNewCaseComment(caseId, saved.getId(), authorId, memberIds);
+            }
+
+            // Notify mentioned users
+            for (Long mentionedUserId : mentionedUserIds) {
+                if (!mentionedUserId.equals(authorId)) {
+                    notificationService.notifyUserMentionedInComment(
+                            mentionedUserId, saved.getId(), caseId, authorId
+                    );
+                }
+            }
+
+            log.info("Comment created with ID: {}", saved.getId());
+            return saved;
         }
         else if (type == CommentType.TASK) {
             if (taskId == null) {
@@ -186,6 +222,25 @@ public class CommentService {
             comment.setTask(task);
             log.info("Creating new task comment for task ID: {}, case ID: {}",
                     taskId, task.getLegalCase().getId());
+
+            Comment saved = commentRepository.save(comment);
+
+            // Notify task assignee about new comment
+            if (task.getAssignedTo() != null && !task.getAssignedTo().getId().equals(authorId)) {
+                notificationService.notifyNewTaskComment(taskId, saved.getId(), authorId);
+            }
+
+            // Notify mentioned users
+            for (Long mentionedUserId : mentionedUserIds) {
+                if (!mentionedUserId.equals(authorId)) {
+                    notificationService.notifyUserMentionedInComment(
+                            mentionedUserId, saved.getId(), task.getLegalCase().getId(), authorId
+                    );
+                }
+            }
+
+            log.info("Comment created with ID: {}", saved.getId());
+            return saved;
         }
 
         Comment saved = commentRepository.save(comment);
