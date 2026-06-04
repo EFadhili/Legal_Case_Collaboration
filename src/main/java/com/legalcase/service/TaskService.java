@@ -11,6 +11,7 @@ import com.legalcase.repository.CaseMemberRepository;
 import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.TaskRepository;
 import com.legalcase.repository.UserRepository;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,10 +32,34 @@ public class TaskService {
     private final UserRepository userRepository;
     private final CaseMemberRepository caseMemberRepository;
     private final NotificationService notificationService;
+    private final AuditService auditService;  // ADDED
 
     // ============================================
     // HELPER METHODS
     // ============================================
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     private Task findTask(String identifier) {
         if (identifier == null || identifier.trim().isEmpty()) {
@@ -179,10 +204,20 @@ public class TaskService {
         Task saved = taskRepository.save(task);
         log.info("Task created with ID: {}, Task Number: {}", saved.getId(), saved.getTaskNumber());
 
-        // Send notification if task is assigned
         if (assignedToUserId != null) {
             notificationService.notifyTaskAssigned(saved.getId(), assignedToUserId, createdById);
         }
+
+        // AUDIT: Task created
+        recordAudit(com.legalcase.enums.AuditAction.TASK_CREATE,
+                com.legalcase.enums.EntityType.TASK,
+                saved.getId(),
+                saved.getTaskNumber(),
+                null,
+                saved,
+                "Task created in case: " + legalCase.getCaseNumber(),
+                true,
+                null);
 
         return saved;
     }
@@ -364,7 +399,6 @@ public class TaskService {
             task.setApprovedAt(LocalDateTime.now());
             task.setProgress(100);
 
-            // Notify task creator and case owner about completion
             notificationService.notifyTaskCompleted(task.getId(), userId);
 
             // Notify tasks that depend on this task
@@ -374,8 +408,31 @@ public class TaskService {
                     notificationService.notifyTaskDependencyMet(dependentTask.getId(), dependentTask.getAssignedTo().getId());
                 }
             }
+
+            // AUDIT: Task completed
+            recordAudit(com.legalcase.enums.AuditAction.TASK_STATUS_CHANGE,
+                    com.legalcase.enums.EntityType.TASK,
+                    task.getId(),
+                    task.getTaskNumber(),
+                    task.getStatus(),
+                    newStatus,
+                    "Task marked as COMPLETED by user " + userId,
+                    true,
+                    null);
+        } else {
+            // AUDIT: Task status changed (not completion)
+            recordAudit(com.legalcase.enums.AuditAction.TASK_STATUS_CHANGE,
+                    com.legalcase.enums.EntityType.TASK,
+                    task.getId(),
+                    task.getTaskNumber(),
+                    task.getStatus(),
+                    newStatus,
+                    "Status changed from " + task.getStatus() + " to " + newStatus,
+                    true,
+                    null);
         }
 
+        TaskStatus oldStatus = task.getStatus();
         task.setStatus(newStatus);
 
         if (newStatus == TaskStatus.IN_PROGRESS && task.getProgress() == 0) {
@@ -406,6 +463,7 @@ public class TaskService {
             throw new UnauthorizedException("Only the assigned user can update task progress");
         }
 
+        Integer oldProgress = task.getProgress();
         task.setProgress(progress);
 
         if (progress == 100 && task.getStatus() != TaskStatus.COMPLETED) {
@@ -417,6 +475,18 @@ public class TaskService {
         }
 
         taskRepository.save(task);
+
+        // AUDIT: Task progress updated
+        recordAudit(com.legalcase.enums.AuditAction.TASK_PROGRESS_UPDATE,
+                com.legalcase.enums.EntityType.TASK,
+                task.getId(),
+                task.getTaskNumber(),
+                oldProgress,
+                progress,
+                "Progress updated from " + oldProgress + "% to " + progress + "%",
+                true,
+                null);
+
         return task;
     }
 
@@ -433,6 +503,7 @@ public class TaskService {
             throw new InvalidStatusTransitionException("Cannot assign tasks in a locked case");
         }
 
+        User oldAssignee = task.getAssignedTo();
         User assignedTo = findUserByIdentifier(userIdentifier);
 
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, assignedTo)) {
@@ -444,6 +515,21 @@ public class TaskService {
 
         notificationService.notifyTaskAssigned(task.getId(), assignedTo.getId(), assignedByUserId);
         log.info("Task {} assigned to user {}", task.getTaskNumber(), assignedTo.getUsername());
+
+        // AUDIT: Task assigned
+        String details = oldAssignee != null ?
+                "Reassigned from " + oldAssignee.getUsername() + " to " + assignedTo.getUsername() :
+                "Assigned to " + assignedTo.getUsername();
+        recordAudit(com.legalcase.enums.AuditAction.TASK_ASSIGN,
+                com.legalcase.enums.EntityType.TASK,
+                task.getId(),
+                task.getTaskNumber(),
+                oldAssignee,
+                assignedTo,
+                details,
+                true,
+                null);
+
         return task;
     }
 
@@ -468,6 +554,17 @@ public class TaskService {
 
         taskRepository.delete(task);
         log.info("Task {} deleted", task.getTaskNumber());
+
+        // AUDIT: Task deleted
+        recordAudit(com.legalcase.enums.AuditAction.TASK_DELETE,
+                com.legalcase.enums.EntityType.TASK,
+                task.getId(),
+                task.getTaskNumber(),
+                task,
+                null,
+                "Task deleted by user " + userId,
+                true,
+                null);
     }
 
     // ============================================
@@ -521,7 +618,6 @@ public class TaskService {
         for (Task task : tasksDueSoon) {
             if (task.getAssignedTo() != null && task.getStatus() != TaskStatus.COMPLETED) {
                 int daysRemaining = (int) java.time.temporal.ChronoUnit.DAYS.between(today, task.getDueDate());
-                // Only notify if days remaining is positive and task not completed
                 if (daysRemaining > 0 && daysRemaining <= 3) {
                     notificationService.notifyTaskDeadlineApproaching(task.getId(), task.getAssignedTo().getId(), daysRemaining);
                     notifiedCount++;

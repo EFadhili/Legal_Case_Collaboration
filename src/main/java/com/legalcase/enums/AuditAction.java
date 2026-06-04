@@ -1,4 +1,73 @@
 package com.legalcase.enums;
 
-public class AuditAction {
+public enum AuditAction {
+    // Authentication & Authorization
+    LOGIN_SUCCESS,
+    LOGIN_FAILURE,
+    LOGOUT,
+    PASSWORD_CHANGE,
+    PASSWORD_RESET,
+    ACCESS_DENIED,
+
+    // User Management
+    USER_CREATE,
+    USER_UPDATE,
+    USER_DELETE,
+    USER_ACTIVATE,
+    USER_DEACTIVATE,
+    USER_ROLE_CHANGE,
+
+    // Case Management
+    CASE_CREATE,
+    CASE_UPDATE,
+    CASE_STATUS_CHANGE,
+    CASE_PRIORITY_CHANGE,
+    CASE_DELETE,
+    CASE_RESTORE,
+    CASE_MEMBER_ADD,
+    CASE_MEMBER_REMOVE,
+    CASE_LOCK,
+    CASE_UNLOCK,
+
+    // Task Management
+    TASK_CREATE,
+    TASK_UPDATE,
+    TASK_STATUS_CHANGE,
+    TASK_PROGRESS_UPDATE,
+    TASK_ASSIGN,
+    TASK_DELETE,
+    TASK_RESTORE,
+
+    // Document Management
+    DOCUMENT_UPLOAD,
+    DOCUMENT_UPDATE,
+    DOCUMENT_DOWNLOAD,
+    DOCUMENT_DELETE,
+    DOCUMENT_RESTORE,
+    DOCUMENT_PROCESS,
+
+    // Chat
+    CHAT_MESSAGE_SEND,
+    CHAT_MESSAGE_EDIT,
+    CHAT_MESSAGE_DELETE,
+    CHAT_MESSAGE_RESTORE,
+
+    // Comments
+    COMMENT_CREATE,
+    COMMENT_UPDATE,
+    COMMENT_DELETE,
+    COMMENT_RESTORE,
+
+    // AI
+    AI_QUERY,
+    AI_RATING,
+
+    // Notifications
+    NOTIFICATION_SEND,
+    NOTIFICATION_READ,
+    NOTIFICATION_DELETE,
+
+    // General
+    EXPORT_DATA,
+    IMPORT_DATA
 }

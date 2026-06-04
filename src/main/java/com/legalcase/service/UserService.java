@@ -4,6 +4,7 @@ import com.legalcase.entity.User;
 import com.legalcase.enums.Role;
 import com.legalcase.exception.*;
 import com.legalcase.repository.UserRepository;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -24,10 +25,34 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final AuditService auditService;  // ADDED
 
     // ============================================
     // HELPER METHODS
     // ============================================
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     private User findActiveUserById(Long id) {
         return userRepository.findById(id)
@@ -101,6 +126,17 @@ public class UserService {
         User savedUser = userRepository.save(user);
         log.info("User registered successfully with ID: {}", savedUser.getId());
 
+        // AUDIT: User registration
+        recordAudit(com.legalcase.enums.AuditAction.USER_CREATE,
+                com.legalcase.enums.EntityType.USER,
+                savedUser.getId(),
+                savedUser.getUsername(),
+                null,
+                savedUser,
+                "User registered with role: " + role,
+                true,
+                null);
+
         return savedUser;
     }
 
@@ -113,29 +149,107 @@ public class UserService {
     public User authenticate(String identifier, String rawPassword) {
         log.debug("Authenticating user: {}", identifier);
 
-        User user = userRepository.findByIdentifierAndIsDeletedFalse(identifier)
-                .orElseThrow(() -> new UnauthorizedException("Invalid username/email or password"));
+        try {
+            User user = userRepository.findByIdentifierAndIsDeletedFalse(identifier)
+                    .orElseThrow(() -> new UnauthorizedException("Invalid username/email or password"));
 
-        if (!user.isActive()) {
-            log.warn("Authentication failed - inactive user: {}", identifier);
-            throw new UnauthorizedException("Account is deactivated. Please contact administrator.");
+            if (!user.isActive()) {
+                log.warn("Authentication failed - inactive user: {}", identifier);
+                // AUDIT: Failed login - inactive account
+                recordAudit(com.legalcase.enums.AuditAction.LOGIN_FAILURE,
+                        com.legalcase.enums.EntityType.USER,
+                        user.getId(),
+                        user.getUsername(),
+                        null,
+                        null,
+                        "Login failed: Account is deactivated",
+                        false,
+                        "Account deactivated");
+                throw new UnauthorizedException("Account is deactivated. Please contact administrator.");
+            }
+
+            if (user.isDeleted()) {
+                log.warn("Authentication failed - deleted user: {}", identifier);
+                // AUDIT: Failed login - deleted account
+                recordAudit(com.legalcase.enums.AuditAction.LOGIN_FAILURE,
+                        com.legalcase.enums.EntityType.USER,
+                        user.getId(),
+                        user.getUsername(),
+                        null,
+                        null,
+                        "Login failed: Account is deleted",
+                        false,
+                        "Account deleted");
+                throw new UnauthorizedException("Account has been deleted. Please contact administrator.");
+            }
+
+            if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
+                log.warn("Authentication failed - incorrect password for: {}", identifier);
+                // AUDIT: Failed login - wrong password
+                recordAudit(com.legalcase.enums.AuditAction.LOGIN_FAILURE,
+                        com.legalcase.enums.EntityType.USER,
+                        user.getId(),
+                        user.getUsername(),
+                        null,
+                        null,
+                        "Login failed: Incorrect password",
+                        false,
+                        "Invalid credentials");
+                throw new UnauthorizedException("Invalid username/email or password");
+            }
+
+            user.setLastLoginAt(LocalDateTime.now());
+            userRepository.save(user);
+
+            log.info("User authenticated successfully: {}", identifier);
+
+            // test
+            auditService.recordAuditSync(
+                    user.getId(),
+                    user.getEmail(),
+                    user.getFullName(),
+                    com.legalcase.enums.AuditAction.LOGIN_SUCCESS,
+                    com.legalcase.enums.EntityType.USER,
+                    user.getId(),
+                    user.getUsername(),
+                    null,
+                    null,
+                    "Login test",
+                    com.legalcase.enums.AuditStatus.SUCCESS,
+                    null,
+                    "127.0.0.1",
+                    "test"
+            );
+
+            // AUDIT: Successful login
+            recordAudit(com.legalcase.enums.AuditAction.LOGIN_SUCCESS,
+                    com.legalcase.enums.EntityType.USER,
+                    user.getId(),
+                    user.getUsername(),
+                    null,
+                    null,
+                    "User logged in successfully",
+                    true,
+                    null);
+
+            return user;
+
+        } catch (UnauthorizedException e) {
+            // Re-throw without additional audit (already recorded)
+            throw e;
+        } catch (Exception e) {
+            // AUDIT: Login failure due to system error
+            recordAudit(com.legalcase.enums.AuditAction.LOGIN_FAILURE,
+                    com.legalcase.enums.EntityType.USER,
+                    null,
+                    identifier,
+                    null,
+                    null,
+                    "Login failed: System error",
+                    false,
+                    e.getMessage());
+            throw e;
         }
-
-        if (user.isDeleted()) {
-            log.warn("Authentication failed - deleted user: {}", identifier);
-            throw new UnauthorizedException("Account has been deleted. Please contact administrator.");
-        }
-
-        if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
-            log.warn("Authentication failed - incorrect password for: {}", identifier);
-            throw new UnauthorizedException("Invalid username/email or password");
-        }
-
-        user.setLastLoginAt(LocalDateTime.now());
-        userRepository.save(user);
-
-        log.info("User authenticated successfully: {}", identifier);
-        return user;
     }
 
     // ============================================
@@ -147,6 +261,8 @@ public class UserService {
         log.info("User {} updating profile for user {}", modifiedBy, userId);
 
         User user = findActiveUserById(userId);
+        String oldFullName = user.getFullName();
+        String oldEmail = user.getEmail();
 
         // Check if email is being changed and if it's available
         if (!user.getEmail().equals(newEmail)) {
@@ -162,7 +278,22 @@ public class UserService {
         }
 
         // Refresh user
-        return findActiveUserById(userId);
+        User updatedUser = findActiveUserById(userId);
+
+        // AUDIT: Profile updated
+        String details = String.format("Full name: '%s' -> '%s', Email: '%s' -> '%s'",
+                oldFullName, newFullName, oldEmail, newEmail);
+        recordAudit(com.legalcase.enums.AuditAction.USER_UPDATE,
+                com.legalcase.enums.EntityType.USER,
+                userId,
+                updatedUser.getUsername(),
+                null,
+                updatedUser,
+                details,
+                true,
+                null);
+
+        return updatedUser;
     }
 
     @Transactional
@@ -185,6 +316,17 @@ public class UserService {
         }
 
         log.info("Password changed successfully for user {}", userId);
+
+        // AUDIT: Password changed
+        recordAudit(com.legalcase.enums.AuditAction.PASSWORD_CHANGE,
+                com.legalcase.enums.EntityType.USER,
+                userId,
+                user.getUsername(),
+                null,
+                null,
+                "Password changed by user",
+                true,
+                null);
     }
 
     // ============================================
@@ -266,6 +408,17 @@ public class UserService {
         userRepository.softDeleteById(userId, LocalDateTime.now(), adminId, deleteReason);
 
         log.info("User {} soft deleted by admin {}", userId, adminId);
+
+        // AUDIT: User soft deleted
+        recordAudit(com.legalcase.enums.AuditAction.USER_DELETE,
+                com.legalcase.enums.EntityType.USER,
+                userId,
+                user.getUsername(),
+                user,
+                null,
+                "Soft deleted by admin " + adminName + ". Reason: " + deleteReason,
+                true,
+                null);
     }
 
     @Transactional
@@ -280,8 +433,18 @@ public class UserService {
         }
 
         userRepository.reactivateById(userId);
-
         log.info("User {} reactivated by admin {}", userId, adminId);
+
+        // AUDIT: User reactivated
+        recordAudit(com.legalcase.enums.AuditAction.USER_ACTIVATE,
+                com.legalcase.enums.EntityType.USER,
+                userId,
+                user.getUsername(),
+                null,
+                user,
+                "Reactivated by admin " + adminName + (reason != null ? ". Reason: " + reason : ""),
+                true,
+                null);
     }
 
     @Transactional
@@ -300,6 +463,17 @@ public class UserService {
         userRepository.save(user);
 
         log.info("User {} deactivated by admin {}", userId, adminId);
+
+        // AUDIT: User deactivated
+        recordAudit(com.legalcase.enums.AuditAction.USER_DEACTIVATE,
+                com.legalcase.enums.EntityType.USER,
+                userId,
+                user.getUsername(),
+                null,
+                user,
+                "Deactivated by admin " + adminName,
+                true,
+                null);
     }
 
     @Transactional
@@ -314,6 +488,17 @@ public class UserService {
         userRepository.save(user);
 
         log.info("User {} activated by admin {}", userId, adminId);
+
+        // AUDIT: User activated
+        recordAudit(com.legalcase.enums.AuditAction.USER_ACTIVATE,
+                com.legalcase.enums.EntityType.USER,
+                userId,
+                user.getUsername(),
+                null,
+                user,
+                "Activated by admin " + adminName,
+                true,
+                null);
     }
 
     @Transactional
@@ -321,6 +506,7 @@ public class UserService {
         log.info("Admin {} ({}) updating user {} role to: {}", adminId, adminName, userId, roleName);
 
         User user = findActiveUserById(userId);
+        Role oldRole = user.getRole();
         Role newRole;
 
         try {
@@ -333,8 +519,21 @@ public class UserService {
         user.setLastModifiedBy(adminId);
         user.setLastModifiedByName(adminName);
 
+        User updatedUser = userRepository.save(user);
         log.info("User {} role updated to {} by admin {}", userId, newRole, adminId);
-        return userRepository.save(user);
+
+        // AUDIT: User role changed
+        recordAudit(com.legalcase.enums.AuditAction.USER_ROLE_CHANGE,
+                com.legalcase.enums.EntityType.USER,
+                userId,
+                user.getUsername(),
+                oldRole,
+                newRole,
+                "Role changed from " + oldRole + " to " + newRole + " by admin " + adminName,
+                true,
+                null);
+
+        return updatedUser;
     }
 
     @Transactional
@@ -348,9 +547,19 @@ public class UserService {
             throw new BusinessException("You cannot permanently delete your own account");
         }
 
-        // Note: This will fail if user has foreign key references
         userRepository.deleteById(userId);
         log.info("User {} permanently deleted by admin {}", userId, adminId);
+
+        // AUDIT: User permanently deleted
+        recordAudit(com.legalcase.enums.AuditAction.USER_DELETE,
+                com.legalcase.enums.EntityType.USER,
+                userId,
+                user.getUsername(),
+                user,
+                null,
+                "Permanently deleted by admin " + adminName,
+                true,
+                null);
     }
 
     // ============================================
@@ -392,6 +601,17 @@ public class UserService {
             userRepository.deleteById(user.getId());
             deletedCount++;
             log.info("Permanently deleted soft-deleted user: {} (ID: {})", user.getUsername(), user.getId());
+
+            // AUDIT: System cleanup - user permanently deleted
+            recordAudit(com.legalcase.enums.AuditAction.USER_DELETE,
+                    com.legalcase.enums.EntityType.USER,
+                    user.getId(),
+                    user.getUsername(),
+                    user,
+                    null,
+                    "System cleanup: Permanently deleted soft-deleted user older than " + days + " days",
+                    true,
+                    null);
         }
 
         return deletedCount;

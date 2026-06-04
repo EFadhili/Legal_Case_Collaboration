@@ -12,6 +12,7 @@ import com.legalcase.enums.*;
 import com.legalcase.repository.CaseMemberRepository;
 import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.UserRepository;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -40,10 +41,33 @@ public class CaseService {
     private final CaseMemberRepository caseMemberRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final AuditService auditService;  // ADDED
 
     // ============================================
     // HELPER METHODS
     // ============================================
+
+    private void recordAudit(AuditAction action, EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? AuditStatus.SUCCESS : AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     private LegalCase findCase(String identifier) {
         if (identifier == null || identifier.trim().isEmpty()) {
@@ -159,14 +183,12 @@ public class CaseService {
         legalCase.setFilingDate(LocalDate.now());
         legalCase.setLocked(false);
 
-
         LegalCase saved = caseRepository.save(legalCase);
         log.info("Case created with number: {}, owner: {}", saved.getCaseNumber(), saved.getOwner().getUsername());
 
         // Add owner as member
         addMemberToCaseByIdentifier(saved.getCaseNumber(), owner.getUsername(), CaseMemberRole.LAWYER, owner.getUsername());
         log.info("Owner added as member to case: {}", saved.getCaseNumber());
-
 
         if (assignedUserIdentifiers != null && !assignedUserIdentifiers.isEmpty()) {
             for (String userIdentifier : assignedUserIdentifiers) {
@@ -180,6 +202,14 @@ public class CaseService {
         }
 
         log.info("Case created with number: {}", saved.getCaseNumber());
+
+        // AUDIT: Case created
+        recordAudit(AuditAction.CASE_CREATE, EntityType.CASE,
+                saved.getId(), saved.getCaseNumber(),
+                null, saved,
+                "Title: " + title,
+                true, null);
+
         return saved;
     }
 
@@ -263,8 +293,7 @@ public class CaseService {
 
     public List<LegalCase> getCasesByCreator(String creatorIdentifier, String requestingUserIdentifier) {
         User creator = findUserByIdentifier(creatorIdentifier);
-        // Any authenticated user can see who created a case
-        findUserByIdentifier(requestingUserIdentifier); // Just verify user exists
+        findUserByIdentifier(requestingUserIdentifier);
         return caseRepository.findByOwnerIdWithDetails(creator.getId());
     }
 
@@ -273,19 +302,19 @@ public class CaseService {
     // ============================================
 
     public List<LegalCase> getCasesDueBefore(String userIdentifier, LocalDate date) {
-        findUserByIdentifier(userIdentifier); // Verify user exists
+        findUserByIdentifier(userIdentifier);
         List<LegalCase> allCases = caseRepository.findByDueDateBeforeWithDetails(date);
         return filterCasesByMembership(allCases, userIdentifier);
     }
 
     public List<LegalCase> getCasesDueAfter(String userIdentifier, LocalDate date) {
-        findUserByIdentifier(userIdentifier); // Verify user exists
+        findUserByIdentifier(userIdentifier);
         List<LegalCase> allCases = caseRepository.findByDueDateAfterWithDetails(date);
         return filterCasesByMembership(allCases, userIdentifier);
     }
 
     public List<LegalCase> getCasesDueBetween(String userIdentifier, LocalDate start, LocalDate end) {
-        findUserByIdentifier(userIdentifier); // Verify user exists
+        findUserByIdentifier(userIdentifier);
         List<LegalCase> allCases = caseRepository.findByDueDateBetweenWithDetails(start, end);
         return filterCasesByMembership(allCases, userIdentifier);
     }
@@ -341,6 +370,7 @@ public class CaseService {
 
         validateTransitionConditions(legalCase, newStatus);
 
+        CaseStatus oldStatus = legalCase.getStatus();
         legalCase.setStatus(newStatus);
 
         if (newStatus == CaseStatus.CLOSED) {
@@ -351,6 +381,13 @@ public class CaseService {
         caseRepository.save(legalCase);
         log.info("Case {} status updated to {}", legalCase.getCaseNumber(), newStatus);
 
+        // AUDIT: Case status changed
+        recordAudit(AuditAction.CASE_STATUS_CHANGE, EntityType.CASE,
+                legalCase.getId(), legalCase.getCaseNumber(),
+                oldStatus, newStatus,
+                "Status changed from " + oldStatus + " to " + newStatus,
+                true, null);
+
         return legalCase;
     }
 
@@ -359,8 +396,17 @@ public class CaseService {
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseModification(legalCase, userIdentifier);
 
+        CasePriority oldPriority = legalCase.getPriority();
         legalCase.setPriority(priority);
         caseRepository.save(legalCase);
+
+        // AUDIT: Case priority changed
+        recordAudit(AuditAction.CASE_PRIORITY_CHANGE, EntityType.CASE,
+                legalCase.getId(), legalCase.getCaseNumber(),
+                oldPriority, priority,
+                "Priority changed from " + oldPriority + " to " + priority,
+                true, null);
+
         return legalCase;
     }
 
@@ -369,8 +415,17 @@ public class CaseService {
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseModification(legalCase, userIdentifier);
 
+        LocalDate oldDueDate = legalCase.getDueDate();
         legalCase.setDueDate(dueDate);
         caseRepository.save(legalCase);
+
+        // AUDIT: Case due date changed
+        recordAudit(AuditAction.CASE_UPDATE, EntityType.CASE,
+                legalCase.getId(), legalCase.getCaseNumber(),
+                oldDueDate, dueDate,
+                "Due date changed from " + oldDueDate + " to " + dueDate,
+                true, null);
+
         return legalCase;
     }
 
@@ -385,8 +440,17 @@ public class CaseService {
             throw new UnauthorizedException("Only admins can lock/unlock cases");
         }
 
+        boolean oldLocked = legalCase.isLocked();
         legalCase.setLocked(locked);
         caseRepository.save(legalCase);
+
+        // AUDIT: Case lock status changed
+        recordAudit(locked ? AuditAction.CASE_LOCK : AuditAction.CASE_UNLOCK, EntityType.CASE,
+                legalCase.getId(), legalCase.getCaseNumber(),
+                oldLocked, locked,
+                "Lock status changed from " + oldLocked + " to " + locked,
+                true, null);
+
         return legalCase;
     }
 
@@ -424,7 +488,16 @@ public class CaseService {
 
         log.info("User '{}' (ID: {}) added to case {} as {}", userIdentifierToAdd, userToAdd.getId(), legalCase.getCaseNumber(), role);
 
-        return caseMemberRepository.save(caseMember);
+        CaseMember saved = caseMemberRepository.save(caseMember);
+
+        // AUDIT: Member added to case
+        recordAudit(AuditAction.CASE_MEMBER_ADD, EntityType.CASE_MEMBER,
+                saved.getId(), null,
+                null, saved,
+                "User " + userToAdd.getUsername() + " added as " + role + " to case " + legalCase.getCaseNumber(),
+                true, null);
+
+        return saved;
     }
 
     @Transactional
@@ -463,6 +536,13 @@ public class CaseService {
                 addedMembers.add(saved);
 
                 notificationService.notifyUserAddedToCase(userToAdd.getId(), legalCase.getId(), addedBy.getId());
+
+                // AUDIT: Member added to case (individual audit for each)
+                recordAudit(AuditAction.CASE_MEMBER_ADD, EntityType.CASE_MEMBER,
+                        saved.getId(), null,
+                        null, saved,
+                        "User " + userToAdd.getUsername() + " added as " + role + " to case " + legalCase.getCaseNumber(),
+                        true, null);
 
             } catch (ResourceNotFoundException e) {
                 notFoundUsers.add(identifier);
@@ -515,10 +595,16 @@ public class CaseService {
 
         User adminUser = findUserByIdentifier(adminUserIdentifier);
 
-        // ADD THIS: Send notification before deleting
         notificationService.notifyUserRemovedFromCase(userToRemove.getId(), legalCase.getId(), adminUser.getId());
 
         caseMemberRepository.deleteByLegalCaseAndUser(legalCase, userToRemove);
+
+        // AUDIT: Member removed from case
+        recordAudit(AuditAction.CASE_MEMBER_REMOVE, EntityType.CASE_MEMBER,
+                null, null,
+                null, null,
+                "User " + userToRemove.getUsername() + " removed from case " + legalCase.getCaseNumber() + " by admin " + adminUser.getUsername(),
+                true, null);
     }
 
     // ============================================
@@ -589,6 +675,13 @@ public class CaseService {
 
         caseRepository.softDeleteById(legalCase.getId());
         log.info("Case {} soft deleted successfully", legalCase.getCaseNumber());
+
+        // AUDIT: Case soft deleted
+        recordAudit(AuditAction.CASE_DELETE, EntityType.CASE,
+                legalCase.getId(), legalCase.getCaseNumber(),
+                legalCase, null,
+                "Case soft deleted by " + user.getUsername(),
+                true, null);
     }
 
     @Transactional
@@ -600,6 +693,13 @@ public class CaseService {
         LegalCase legalCase = findCase(caseIdentifier);
         caseRepository.restoreById(legalCase.getId());
         log.info("Case {} restored successfully", legalCase.getCaseNumber());
+
+        // AUDIT: Case restored
+        recordAudit(AuditAction.CASE_RESTORE, EntityType.CASE,
+                legalCase.getId(), legalCase.getCaseNumber(),
+                null, legalCase,
+                "Case restored by admin " + userIdentifier,
+                true, null);
     }
 
     public List<LegalCase> getDeletedCases(String userIdentifier) {
@@ -688,4 +788,3 @@ public class CaseService {
         return caseNumber;
     }
 }
-

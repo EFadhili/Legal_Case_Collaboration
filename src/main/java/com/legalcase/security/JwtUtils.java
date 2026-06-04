@@ -70,6 +70,11 @@ public class JwtUtils {
         return claims.get("role", String.class);
     }
 
+    // NEW: Get username from token (using email as username identifier)
+    public String getUserNameFromToken(String token) {
+        return getEmailFromToken(token);  // Using email as the user identifier
+    }
+
     public boolean validateToken(String token) {
         try {
             Jwts.parser()

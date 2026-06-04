@@ -7,7 +7,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableAsync
-@EnableScheduling  // ← ADD THIS
+@EnableScheduling
 public class LegalCaseApplication {
 
     public static void main(String[] args) {

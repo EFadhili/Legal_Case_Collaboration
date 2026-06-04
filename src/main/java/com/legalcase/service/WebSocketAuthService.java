@@ -5,6 +5,7 @@ import com.legalcase.entity.User;
 import com.legalcase.repository.CaseMemberRepository;
 import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.UserRepository;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -17,6 +18,34 @@ public class WebSocketAuthService {
     private final CaseMemberRepository caseMemberRepository;
     private final CaseRepository caseRepository;
     private final UserRepository userRepository;
+    private final AuditService auditService;  // ADDED
+
+    // ============================================
+    // HELPER METHOD
+    // ============================================
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     /**
      * Check if a user can access a case chat.
@@ -35,6 +64,16 @@ public class WebSocketAuthService {
 
             if (userId == null) {
                 log.warn("User not found: {}", userIdentifier);
+                // AUDIT: User not found during WebSocket authentication
+                recordAudit(com.legalcase.enums.AuditAction.ACCESS_DENIED,
+                        com.legalcase.enums.EntityType.USER,
+                        null,
+                        userIdentifier,
+                        null,
+                        null,
+                        "WebSocket access denied: User not found for case: " + caseIdentifier,
+                        false,
+                        "User not found");
                 return false;
             }
 
@@ -43,6 +82,16 @@ public class WebSocketAuthService {
 
             if (caseId == null) {
                 log.warn("Case not found: {}", caseIdentifier);
+                // AUDIT: Case not found during WebSocket authentication
+                recordAudit(com.legalcase.enums.AuditAction.ACCESS_DENIED,
+                        com.legalcase.enums.EntityType.CASE,
+                        null,
+                        caseIdentifier,
+                        null,
+                        null,
+                        "WebSocket access denied: Case not found for user: " + userIdentifier,
+                        false,
+                        "Case not found");
                 return false;
             }
 
@@ -53,6 +102,16 @@ public class WebSocketAuthService {
                 log.debug("User {} is a member of case {}", userIdentifier, caseIdentifier);
             } else {
                 log.warn("User {} is NOT a member of case {}", userIdentifier, caseIdentifier);
+                // AUDIT: Non-member attempted WebSocket access
+                recordAudit(com.legalcase.enums.AuditAction.ACCESS_DENIED,
+                        com.legalcase.enums.EntityType.CASE,
+                        caseId,
+                        caseIdentifier,
+                        null,
+                        null,
+                        "WebSocket access denied: User " + userIdentifier + " is not a member of case " + caseIdentifier,
+                        false,
+                        "User is not a case member");
             }
 
             return isMember;
@@ -60,6 +119,16 @@ public class WebSocketAuthService {
         } catch (Exception e) {
             log.error("Error checking case membership for user {} in case {}: {}",
                     userIdentifier, caseIdentifier, e.getMessage());
+            // AUDIT: System error during WebSocket authentication
+            recordAudit(com.legalcase.enums.AuditAction.ACCESS_DENIED,
+                    com.legalcase.enums.EntityType.CASE,
+                    null,
+                    caseIdentifier,
+                    null,
+                    null,
+                    "WebSocket access denied: System error for user " + userIdentifier,
+                    false,
+                    e.getMessage());
             return false;
         }
     }

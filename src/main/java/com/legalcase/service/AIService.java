@@ -12,6 +12,7 @@ import com.legalcase.enums.AIQueryType;
 import com.legalcase.enums.Role;
 import com.legalcase.exception.*;
 import com.legalcase.repository.*;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +44,7 @@ public class AIService {
     private final NotificationService notificationService;
     private final WebClient webClient;
     private final ObjectMapper objectMapper;
+    private final AuditService auditService;  // ADDED
 
 
     @Value("${gemini.api.key:}")
@@ -60,6 +62,29 @@ public class AIService {
     // ============================================
     // HELPER METHODS
     // ============================================
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     private User findUserByIdentifier(String identifier) {
         return userRepository.findByUsername(identifier)
@@ -239,6 +264,17 @@ public class AIService {
             );
         }
 
+        // AUDIT: AI query performed
+        recordAudit(com.legalcase.enums.AuditAction.AI_QUERY,
+                com.legalcase.enums.EntityType.AI_INTERACTION,
+                interaction.getId(),
+                interaction.getInteractionNumber(),
+                request,
+                interaction,
+                "Query type: " + request.getQueryType(),
+                true,
+                null);
+
         return AIResponse.fromEntity(interaction);
     }
 
@@ -293,6 +329,17 @@ public class AIService {
         interaction.setProcessingTimeMs(processingTime);
 
         aiInteractionRepository.save(interaction);
+
+        // AUDIT: AI conversation (query)
+        recordAudit(com.legalcase.enums.AuditAction.AI_QUERY,
+                com.legalcase.enums.EntityType.AI_INTERACTION,
+                interaction.getId(),
+                interaction.getInteractionNumber(),
+                request,
+                interaction,
+                "Conversation query",
+                true,
+                null);
 
         return AIResponse.fromEntity(interaction);
     }
@@ -609,6 +656,17 @@ public class AIService {
         );
 
         aiInteractionRepository.updateRating(interaction.getId(), rating, now, user.getId(), historyRecord);
+
+        // AUDIT: AI rating changed
+        recordAudit(com.legalcase.enums.AuditAction.AI_RATING,
+                com.legalcase.enums.EntityType.AI_INTERACTION,
+                interaction.getId(),
+                interaction.getInteractionNumber(),
+                oldRating,
+                rating,
+                "Rating changed from " + oldRating + " to " + rating,
+                true,
+                null);
     }
 
     // ============================================
@@ -629,6 +687,17 @@ public class AIService {
 
         String deleteReason = (reason != null && !reason.isEmpty()) ? reason : "No reason provided";
         aiInteractionRepository.softDelete(interaction.getId(), LocalDateTime.now(), user.getId(), deleteReason);
+
+        // AUDIT: AI interaction soft deleted
+        recordAudit(com.legalcase.enums.AuditAction.AI_QUERY,
+                com.legalcase.enums.EntityType.AI_INTERACTION,
+                interaction.getId(),
+                interaction.getInteractionNumber(),
+                interaction,
+                null,
+                "Soft deleted by " + userIdentifier + ", reason: " + deleteReason,
+                true,
+                null);
     }
 
     @Transactional
@@ -650,6 +719,17 @@ public class AIService {
         }
 
         aiInteractionRepository.restore(interaction.getId());
+
+        // AUDIT: AI interaction restored
+        recordAudit(com.legalcase.enums.AuditAction.AI_QUERY,
+                com.legalcase.enums.EntityType.AI_INTERACTION,
+                interaction.getId(),
+                interaction.getInteractionNumber(),
+                null,
+                interaction,
+                "Restored by admin " + userIdentifier,
+                true,
+                null);
     }
 
     // ============================================
@@ -665,4 +745,6 @@ public class AIService {
         User user = findUserByIdentifier(userIdentifier);
         return aiInteractionRepository.countByUserAndIsDeletedFalse(user);
     }
+
+
 }

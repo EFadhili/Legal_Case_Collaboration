@@ -10,6 +10,7 @@ import com.legalcase.enums.TextExtractionStatus;
 import com.legalcase.exception.*;
 import com.legalcase.repository.*;
 import com.legalcase.util.FileUtils;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -37,10 +38,34 @@ public class DocumentService {
     private final FileUtils fileUtils;
     private final DocumentProcessingService processingService;
     private final NotificationService notificationService;
+    private final AuditService auditService;  // ADDED
 
     // ============================================
     // HELPER METHODS
     // ============================================
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     private User findUserByIdentifier(String identifier) {
         return userRepository.findByUsername(identifier)
@@ -196,6 +221,17 @@ public class DocumentService {
 
         processingService.extractTextAsync(saved);
 
+        // AUDIT: Document uploaded to case
+        recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_UPLOAD,
+                com.legalcase.enums.EntityType.DOCUMENT,
+                saved.getId(),
+                saved.getDocumentNumber(),
+                null,
+                saved,
+                "Uploaded to case: " + legalCase.getCaseNumber(),
+                true,
+                null);
+
         return saved;
     }
 
@@ -233,6 +269,17 @@ public class DocumentService {
         }
 
         processingService.extractTextAsync(saved);
+
+        // AUDIT: Document uploaded to task
+        recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_UPLOAD,
+                com.legalcase.enums.EntityType.DOCUMENT,
+                saved.getId(),
+                saved.getDocumentNumber(),
+                null,
+                saved,
+                "Uploaded to task: " + task.getTaskNumber() + " in case: " + task.getLegalCase().getCaseNumber(),
+                true,
+                null);
 
         return saved;
     }
@@ -378,6 +425,9 @@ public class DocumentService {
 
         LocalDateTime now = LocalDateTime.now();
 
+        String oldDescription = document.getDescription();
+        String oldTags = document.getTags();
+
         String editRecord = String.format(
                 "{\"timestamp\":\"%s\",\"editedBy\":%d,\"editedByName\":\"%s\",\"oldDescription\":\"%s\",\"oldTags\":\"%s\",\"newDescription\":\"%s\",\"newTags\":\"%s\",\"reason\":\"%s\"}|",
                 now.toString(), user.getId(), user.getFullName(),
@@ -393,6 +443,17 @@ public class DocumentService {
 
         document = findByIdentifier(documentIdentifier);
         log.info("Document {} metadata updated", documentIdentifier);
+
+        // AUDIT: Document metadata updated
+        recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_UPDATE,
+                com.legalcase.enums.EntityType.DOCUMENT,
+                document.getId(),
+                document.getDocumentNumber(),
+                "Description: " + oldDescription + ", Tags: " + oldTags,
+                "Description: " + description + ", Tags: " + tags,
+                "Metadata updated by " + userIdentifier,
+                true,
+                null);
 
         return document;
     }
@@ -420,6 +481,17 @@ public class DocumentService {
 
         documentRepository.softDelete(document.getId(), LocalDateTime.now(), user.getId());
         log.info("Document {} soft deleted", documentIdentifier);
+
+        // AUDIT: Document soft deleted
+        recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_DELETE,
+                com.legalcase.enums.EntityType.DOCUMENT,
+                document.getId(),
+                document.getDocumentNumber(),
+                document,
+                null,
+                "Soft deleted by " + userIdentifier + (reason != null ? ", reason: " + reason : ""),
+                true,
+                null);
     }
 
     @Transactional
@@ -435,6 +507,17 @@ public class DocumentService {
         Document document = findByIdentifier(documentIdentifier);
         documentRepository.restore(document.getId());
         log.info("Document {} restored", documentIdentifier);
+
+        // AUDIT: Document restored
+        recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_RESTORE,
+                com.legalcase.enums.EntityType.DOCUMENT,
+                document.getId(),
+                document.getDocumentNumber(),
+                null,
+                document,
+                "Restored by admin " + userIdentifier,
+                true,
+                null);
     }
 
     @Transactional
@@ -457,6 +540,17 @@ public class DocumentService {
 
         documentRepository.deleteById(document.getId());
         log.info("Document {} permanently deleted", documentIdentifier);
+
+        // AUDIT: Document permanently deleted
+        recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_DELETE,
+                com.legalcase.enums.EntityType.DOCUMENT,
+                document.getId(),
+                document.getDocumentNumber(),
+                document,
+                null,
+                "Permanently deleted by admin " + userIdentifier,
+                true,
+                null);
     }
 
     // ============================================
@@ -469,7 +563,20 @@ public class DocumentService {
         verifyDocumentAccess(document, user);
 
         try {
-            return fileUtils.generatePresignedUrl(document.getStoragePath());
+            String url = fileUtils.generatePresignedUrl(document.getStoragePath());
+
+            // AUDIT: Document downloaded
+            recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_DOWNLOAD,
+                    com.legalcase.enums.EntityType.DOCUMENT,
+                    document.getId(),
+                    document.getDocumentNumber(),
+                    null,
+                    null,
+                    "Document downloaded by " + userIdentifier,
+                    true,
+                    null);
+
+            return url;
         } catch (Exception e) {
             throw new FileProcessingException("Failed to generate download URL: " + e.getMessage());
         }

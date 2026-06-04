@@ -6,6 +6,7 @@ import com.legalcase.enums.TextExtractionStatus;
 import com.legalcase.exception.FileProcessingException;
 import com.legalcase.repository.DocumentRepository;
 import com.legalcase.util.FileUtils;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,9 +27,37 @@ public class DocumentProcessingService {
     private final DocumentRepository documentRepository;
     private final FileUtils fileUtils;
     private final NotificationService notificationService;
+    private final AuditService auditService;  // ADDED
 
     @Value("${document.processing.max-retries:3}")
     private int maxRetries;
+
+    // ============================================
+    // HELPER METHOD
+    // ============================================
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     @Async("documentTaskExecutor")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -71,6 +100,18 @@ public class DocumentProcessingService {
 
                 log.info("Text extraction completed for document: {} ({} characters extracted)",
                         managedDocument.getDocumentNumber(), extractedText.length());
+
+                // AUDIT: Document processing successful
+                recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_PROCESS,
+                        com.legalcase.enums.EntityType.DOCUMENT,
+                        managedDocument.getId(),
+                        managedDocument.getDocumentNumber(),
+                        null,
+                        managedDocument,
+                        "Text extraction completed successfully",
+                        true,
+                        null);
+
                 return CompletableFuture.completedFuture(null);
 
             } catch (Exception e) {
@@ -88,6 +129,18 @@ public class DocumentProcessingService {
 
                     log.error("Document {} extraction failed permanently after {} attempts",
                             managedDocument.getDocumentNumber(), maxRetries);
+
+                    // AUDIT: Document processing failed
+                    recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_PROCESS,
+                            com.legalcase.enums.EntityType.DOCUMENT,
+                            managedDocument.getId(),
+                            managedDocument.getDocumentNumber(),
+                            null,
+                            null,
+                            "Text extraction failed: " + e.getMessage(),
+                            false,
+                            e.getMessage());
+
                 } else {
                     long delay = 2000L * retryCount;
                     try {
@@ -173,6 +226,18 @@ public class DocumentProcessingService {
                 document.getUploadedBy().getId(), true, null);
 
         log.info("Sync text extraction completed for document: {}", document.getDocumentNumber());
+
+        // AUDIT: Document processing successful (sync)
+        recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_PROCESS,
+                com.legalcase.enums.EntityType.DOCUMENT,
+                document.getId(),
+                document.getDocumentNumber(),
+                null,
+                document,
+                "Sync text extraction completed successfully",
+                true,
+                null);
+
         return extractedText;
     }
 
@@ -193,6 +258,17 @@ public class DocumentProcessingService {
 
                 notificationService.notifyDocumentProcessed(document.getId(),
                         document.getUploadedBy().getId(), false, "Processing timed out");
+
+                // AUDIT: Document processing failed due to timeout
+                recordAudit(com.legalcase.enums.AuditAction.DOCUMENT_PROCESS,
+                        com.legalcase.enums.EntityType.DOCUMENT,
+                        document.getId(),
+                        document.getDocumentNumber(),
+                        null,
+                        null,
+                        "Text extraction timed out after " + timeoutSeconds + " seconds",
+                        false,
+                        "Processing timeout");
             }
         } else {
             log.debug("No stuck processing documents found");

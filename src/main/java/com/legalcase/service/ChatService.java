@@ -13,6 +13,7 @@ import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.ChatMessageRepository;
 import com.legalcase.repository.TaskRepository;
 import com.legalcase.repository.UserRepository;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -43,6 +44,7 @@ public class ChatService {
     private final TaskRepository taskRepository;
     private final NotificationService notificationService;
     private final ApplicationEventPublisher eventPublisher;
+    private final AuditService auditService;  // ADDED
 
     // ============================================
     // HELPER METHODS
@@ -59,6 +61,29 @@ public class ChatService {
     }
 
     private final ThreadLocal<CachedCaseInfo> caseInfoCache = new ThreadLocal<>();
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     private LegalCase findCaseWithCache(String caseIdentifier, String userIdentifier) {
         CachedCaseInfo cached = caseInfoCache.get();
@@ -189,7 +214,7 @@ public class ChatService {
             message.setSender(sender);
             message.setSentAt(LocalDateTime.now());
             message.setRead(false);
-            message.setDeleted(false); // Initialize as not deleted
+            message.setDeleted(false);
 
             if (fileUrl != null) {
                 log.debug("File attachment: {} ({})", fileName, fileUrl);
@@ -273,6 +298,17 @@ public class ChatService {
                 notificationService.notifyNewChatMessage(legalCase.getId(), senderId, saved.getId(), content, memberIds);
             }
 
+            // AUDIT: Chat message sent
+            recordAudit(com.legalcase.enums.AuditAction.CHAT_MESSAGE_SEND,
+                    com.legalcase.enums.EntityType.CHAT_MESSAGE,
+                    saved.getId(),
+                    null,
+                    null,
+                    saved,
+                    "Case: " + legalCase.getCaseNumber(),
+                    true,
+                    null);
+
             return saved;
         } finally {
             clearCache();
@@ -280,7 +316,7 @@ public class ChatService {
     }
 
     // ============================================
-    // DELETE MESSAGE (NEW)
+    // DELETE MESSAGE
     // ============================================
 
     @Transactional
@@ -291,7 +327,6 @@ public class ChatService {
         ChatMessage message = chatMessageRepository.findByIdAndIsDeletedFalse(messageId)
                 .orElseThrow(() -> new ResourceNotFoundException("Message", messageId));
 
-        // Verify user is a case member
         verifyCaseMembership(message.getLegalCase().getId(), user.getId());
 
         LocalDateTime now = LocalDateTime.now();
@@ -320,12 +355,19 @@ public class ChatService {
             throw new AccessDeniedException("You don't have permission to delete this message");
         }
 
-        // Perform soft delete
         String deleteReason = (reason != null && !reason.isEmpty()) ? reason : "No reason provided";
         chatMessageRepository.softDeleteMessage(messageId, now, user.getId(), deleteReason);
 
-        // Notify case members about deletion (optional)
-        // notificationService.notifyMessageDeleted(message.getLegalCase().getId(), messageId, user.getId());
+        // AUDIT: Chat message deleted
+        recordAudit(com.legalcase.enums.AuditAction.CHAT_MESSAGE_DELETE,
+                com.legalcase.enums.EntityType.CHAT_MESSAGE,
+                messageId,
+                null,
+                message,
+                null,
+                "Deleted by: " + userIdentifier + ", reason: " + deleteReason,
+                true,
+                null);
 
         return MessageDeletedResponse.builder()
                 .messageId(messageId)
@@ -336,6 +378,84 @@ public class ChatService {
                 .deletedAt(now)
                 .reason(deleteReason)
                 .isDeleted(true)
+                .build();
+    }
+
+    // ============================================
+    // EDIT MESSAGE
+    // ============================================
+
+    @Transactional
+    public MessageEditedResponse editMessage(Long messageId, String newContent,
+                                             String userIdentifier, String reason) {
+        log.info("User {} attempting to edit message {}", userIdentifier, messageId);
+
+        User user = findUserByIdentifier(userIdentifier);
+        ChatMessage message = chatMessageRepository.findByIdAndIsDeletedFalse(messageId)
+                .orElseThrow(() -> new ResourceNotFoundException("Message", messageId));
+
+        verifyCaseMembership(message.getLegalCase().getId(), user.getId());
+
+        LocalDateTime now = LocalDateTime.now();
+        boolean isAdmin = user.getRole() == Role.ADMIN;
+        boolean isLawyer = user.getRole() == Role.LAWYER;
+        boolean isSender = message.getSender().getId().equals(user.getId());
+        boolean isWithinTimeLimit = message.getSentAt().isAfter(now.minusMinutes(10)); // 10 min edit window
+
+        // Permission logic (stricter than delete)
+        if (isAdmin) {
+            log.info("Admin {} editing message {}", userIdentifier, messageId);
+        }
+        else if (isLawyer) {
+            log.info("Lawyer {} editing message {}", userIdentifier, messageId);
+        }
+        else if (isSender && isWithinTimeLimit) {
+            log.info("User {} editing their own message within time limit", userIdentifier);
+        }
+        else if (isSender && !isWithinTimeLimit) {
+            throw new AccessDeniedException("You can only edit messages within 10 minutes of sending");
+        }
+        else {
+            throw new AccessDeniedException("You don't have permission to edit this message");
+        }
+
+        String oldContent = message.getContent();
+
+        // Create edit history record (JSON format)
+        String editRecord = String.format(
+                "{\"timestamp\":\"%s\",\"editedBy\":%d,\"editedByName\":\"%s\",\"oldContent\":\"%s\",\"reason\":\"%s\"}|",
+                now.toString(), user.getId(), user.getFullName(),
+                escapeJson(message.getContent()),
+                reason != null ? escapeJson(reason) : ""
+        );
+
+        // Update message
+        chatMessageRepository.updateMessageContent(
+                messageId, newContent, now, user.getId(), user.getFullName(), editRecord
+        );
+
+        // AUDIT: Chat message edited
+        recordAudit(com.legalcase.enums.AuditAction.CHAT_MESSAGE_EDIT,
+                com.legalcase.enums.EntityType.CHAT_MESSAGE,
+                messageId,
+                null,
+                message,
+                null,
+                "Old content: " + oldContent + ", New content: " + newContent,
+                true,
+                null);
+
+        return MessageEditedResponse.builder()
+                .messageId(messageId)
+                .caseId(message.getLegalCase().getId())
+                .caseNumber(message.getLegalCase().getCaseNumber())
+                .oldContent(oldContent)
+                .newContent(newContent)
+                .editedBy(user.getId())
+                .editedByName(user.getFullName())
+                .editedAt(now)
+                .reason(reason)
+                .isEdited(true)
                 .build();
     }
 
@@ -387,7 +507,7 @@ public class ChatService {
     }
 
     // ============================================
-    // ENHANCED UNREAD STATUS (NEW)
+    // ENHANCED UNREAD STATUS
     // ============================================
 
     public CaseUnreadStatusResponse getDetailedUnreadStatus(String userIdentifier) {
@@ -407,7 +527,6 @@ public class ChatService {
             long unreadCount = chatMessageRepository.countUnreadMessagesInCase(caseId, userId);
             totalUnread += unreadCount;
 
-            // Get last message info
             ChatMessage lastMessage = chatMessageRepository.findLatestMessageInCase(legalCase).orElse(null);
 
             CaseUnreadInfo info = CaseUnreadInfo.builder()
@@ -431,7 +550,6 @@ public class ChatService {
             }
         }
 
-        // Sort cases with unread first, then by last message time descending
         allCases.sort((a, b) -> {
             if (a.getUnreadCount() > 0 && b.getUnreadCount() == 0) return -1;
             if (a.getUnreadCount() == 0 && b.getUnreadCount() > 0) return 1;
@@ -573,69 +691,6 @@ public class ChatService {
         }
 
         verifyCaseMembership(requestedCaseIdentifier, userIdentifier);
-    }
-
-    @Transactional
-    public MessageEditedResponse editMessage(Long messageId, String newContent,
-                                             String userIdentifier, String reason) {
-        log.info("User {} attempting to edit message {}", userIdentifier, messageId);
-
-        User user = findUserByIdentifier(userIdentifier);
-        ChatMessage message = chatMessageRepository.findByIdAndIsDeletedFalse(messageId)
-                .orElseThrow(() -> new ResourceNotFoundException("Message", messageId));
-
-        // Verify user is a case member
-        verifyCaseMembership(message.getLegalCase().getId(), user.getId());
-
-        LocalDateTime now = LocalDateTime.now();
-        boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
-        boolean isSender = message.getSender().getId().equals(user.getId());
-        boolean isWithinTimeLimit = message.getSentAt().isAfter(now.minusMinutes(10)); // 10 min edit window
-
-        // Permission logic (stricter than delete)
-        if (isAdmin) {
-            log.info("Admin {} editing message {}", userIdentifier, messageId);
-        }
-        else if (isLawyer) {
-            // Lawyers can edit any message in their cases (for corrections)
-            log.info("Lawyer {} editing message {}", userIdentifier, messageId);
-        }
-        else if (isSender && isWithinTimeLimit) {
-            log.info("User {} editing their own message within time limit", userIdentifier);
-        }
-        else if (isSender && !isWithinTimeLimit) {
-            throw new AccessDeniedException("You can only edit messages within 10 minutes of sending");
-        }
-        else {
-            throw new AccessDeniedException("You don't have permission to edit this message");
-        }
-
-        // Create edit history record (JSON format)
-        String editRecord = String.format(
-                "{\"timestamp\":\"%s\",\"editedBy\":%d,\"editedByName\":\"%s\",\"oldContent\":\"%s\",\"reason\":\"%s\"}|",
-                now.toString(), user.getId(), user.getFullName(),
-                escapeJson(message.getContent()),
-                reason != null ? escapeJson(reason) : ""
-        );
-
-        // Update message
-        chatMessageRepository.updateMessageContent(
-                messageId, newContent, now, user.getId(),user.getFullName(), editRecord
-        );
-
-        return MessageEditedResponse.builder()
-                .messageId(messageId)
-                .caseId(message.getLegalCase().getId())
-                .caseNumber(message.getLegalCase().getCaseNumber())
-                .oldContent(message.getContent())
-                .newContent(newContent)
-                .editedBy(user.getId())
-                .editedByName(user.getFullName())
-                .editedAt(now)
-                .reason(reason)
-                .isEdited(true)
-                .build();
     }
 
     private String escapeJson(String text) {

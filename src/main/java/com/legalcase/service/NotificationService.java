@@ -9,6 +9,7 @@ import com.legalcase.enums.Role;
 import com.legalcase.exception.AccessDeniedException;
 import com.legalcase.exception.ResourceNotFoundException;
 import com.legalcase.repository.*;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -35,10 +36,34 @@ public class NotificationService {
     private final TaskRepository taskRepository;
     private final CaseMemberRepository caseMemberRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final AuditService auditService;  // ADDED
 
     // ============================================
     // HELPER METHODS
     // ============================================
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     private User findUserByIdentifier(String identifier) {
         return userRepository.findByUsername(identifier)
@@ -120,6 +145,17 @@ public class NotificationService {
         if (caseId != null) {
             broadcastToCase(caseId, saved);
         }
+
+        // AUDIT: Notification sent
+        recordAudit(com.legalcase.enums.AuditAction.NOTIFICATION_SEND,
+                com.legalcase.enums.EntityType.NOTIFICATION,
+                saved.getId(),
+                null,
+                null,
+                saved,
+                "Notification type: " + type + ", user: " + userId,
+                true,
+                null);
 
         return saved;
     }
@@ -441,17 +477,56 @@ public class NotificationService {
 
     public int markAsRead(List<Long> notificationIds, String userIdentifier) {
         Long userId = getUserIdFromIdentifier(userIdentifier);
-        return notificationRepository.markAsRead(notificationIds, userId, LocalDateTime.now());
+        int count = notificationRepository.markAsRead(notificationIds, userId, LocalDateTime.now());
+
+        // AUDIT: Notifications marked as read
+        recordAudit(com.legalcase.enums.AuditAction.NOTIFICATION_READ,
+                com.legalcase.enums.EntityType.NOTIFICATION,
+                null,
+                null,
+                null,
+                null,
+                "Marked " + count + " notifications as read by " + userIdentifier,
+                true,
+                null);
+
+        return count;
     }
 
     public int markAllAsRead(String userIdentifier) {
         Long userId = getUserIdFromIdentifier(userIdentifier);
-        return notificationRepository.markAllAsRead(userId, LocalDateTime.now());
+        int count = notificationRepository.markAllAsRead(userId, LocalDateTime.now());
+
+        // AUDIT: All notifications marked as read
+        recordAudit(com.legalcase.enums.AuditAction.NOTIFICATION_READ,
+                com.legalcase.enums.EntityType.NOTIFICATION,
+                null,
+                null,
+                null,
+                null,
+                "Marked all notifications as read by " + userIdentifier,
+                true,
+                null);
+
+        return count;
     }
 
     public int archive(List<Long> notificationIds, String userIdentifier) {
         Long userId = getUserIdFromIdentifier(userIdentifier);
-        return notificationRepository.archive(notificationIds, userId, LocalDateTime.now());
+        int count = notificationRepository.archive(notificationIds, userId, LocalDateTime.now());
+
+        // AUDIT: Notifications archived
+        recordAudit(com.legalcase.enums.AuditAction.NOTIFICATION_DELETE,
+                com.legalcase.enums.EntityType.NOTIFICATION,
+                null,
+                null,
+                null,
+                null,
+                "Archived " + count + " notifications by " + userIdentifier,
+                true,
+                null);
+
+        return count;
     }
 
     // ============================================
@@ -460,11 +535,36 @@ public class NotificationService {
 
     public int deleteNotifications(List<Long> notificationIds, String userIdentifier) {
         Long userId = getUserIdFromIdentifier(userIdentifier);
-        return notificationRepository.deleteByIds(notificationIds, userId);
+        int count = notificationRepository.deleteByIds(notificationIds, userId);
+
+        // AUDIT: Notifications deleted
+        recordAudit(com.legalcase.enums.AuditAction.NOTIFICATION_DELETE,
+                com.legalcase.enums.EntityType.NOTIFICATION,
+                null,
+                null,
+                null,
+                null,
+                "Deleted " + count + " notifications by " + userIdentifier,
+                true,
+                null);
+
+        return count;
     }
 
     public int deleteOldReadAndArchivedNotifications() {
-        LocalDateTime thirtyDaysAgo = LocalDateTime.now().minusDays(30);
-        return notificationRepository.deleteOldReadAndArchivedNotifications(thirtyDaysAgo);
+        int count = notificationRepository.deleteOldReadAndArchivedNotifications(LocalDateTime.now().minusDays(30));
+
+        // AUDIT: Old notifications cleaned up
+        recordAudit(com.legalcase.enums.AuditAction.NOTIFICATION_DELETE,
+                com.legalcase.enums.EntityType.NOTIFICATION,
+                null,
+                null,
+                null,
+                null,
+                "System cleanup: deleted " + count + " old read/archived notifications",
+                true,
+                null);
+
+        return count;
     }
 }

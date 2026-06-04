@@ -12,6 +12,7 @@ import com.legalcase.repository.CaseRepository;
 import com.legalcase.repository.CommentRepository;
 import com.legalcase.repository.TaskRepository;
 import com.legalcase.repository.UserRepository;
+import com.legalcase.util.AuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,10 +35,34 @@ public class CommentService {
     private final UserRepository userRepository;
     private final CaseMemberRepository caseMemberRepository;
     private final NotificationService notificationService;
+    private final AuditService auditService;  // ADDED
 
     // ============================================
     // HELPER METHODS
     // ============================================
+
+    private void recordAudit(com.legalcase.enums.AuditAction action,
+                             com.legalcase.enums.EntityType entityType,
+                             Long entityId, String entityIdentifier,
+                             Object beforeState, Object afterState,
+                             String details, boolean success, String errorMessage) {
+        auditService.recordAuditAsync(
+                AuditContext.getCurrentUserId(),
+                AuditContext.getCurrentUserIdentifier(),
+                AuditContext.getCurrentUserName(),
+                action,
+                entityType,
+                entityId,
+                entityIdentifier,
+                beforeState,
+                afterState,
+                details,
+                success ? com.legalcase.enums.AuditStatus.SUCCESS : com.legalcase.enums.AuditStatus.FAILURE,
+                errorMessage,
+                AuditContext.getCurrentIpAddress(),
+                AuditContext.getCurrentUserAgent()
+        );
+    }
 
     private User findUserByIdentifier(String identifier) {
         return userRepository.findByUsername(identifier)
@@ -164,6 +189,17 @@ public class CommentService {
                 );
             }
 
+            // AUDIT: Comment reply created
+            recordAudit(com.legalcase.enums.AuditAction.COMMENT_CREATE,
+                    com.legalcase.enums.EntityType.COMMENT,
+                    saved.getId(),
+                    null,
+                    null,
+                    saved,
+                    "Reply to comment ID: " + parentCommentId,
+                    true,
+                    null);
+
             return saved;
         }
 
@@ -209,6 +245,18 @@ public class CommentService {
             }
 
             log.info("Comment created with ID: {}", saved.getId());
+
+            // AUDIT: Case comment created
+            recordAudit(com.legalcase.enums.AuditAction.COMMENT_CREATE,
+                    com.legalcase.enums.EntityType.COMMENT,
+                    saved.getId(),
+                    null,
+                    null,
+                    saved,
+                    "Case comment on case ID: " + caseId,
+                    true,
+                    null);
+
             return saved;
         }
         else if (type == CommentType.TASK) {
@@ -240,6 +288,18 @@ public class CommentService {
             }
 
             log.info("Comment created with ID: {}", saved.getId());
+
+            // AUDIT: Task comment created
+            recordAudit(com.legalcase.enums.AuditAction.COMMENT_CREATE,
+                    com.legalcase.enums.EntityType.COMMENT,
+                    saved.getId(),
+                    null,
+                    null,
+                    saved,
+                    "Task comment on task ID: " + taskId,
+                    true,
+                    null);
+
             return saved;
         }
 
@@ -349,10 +409,22 @@ public class CommentService {
             throw new AccessDeniedException("You don't have permission to edit this comment");
         }
 
+        String oldContent = comment.getContent();
         commentRepository.updateCommentContent(commentId, newContent, now, user.getId(), user.getFullName());
 
         comment = commentRepository.findCommentWithDetails(commentId).orElseThrow();
         log.info("Comment {} updated", commentId);
+
+        // AUDIT: Comment updated
+        recordAudit(com.legalcase.enums.AuditAction.COMMENT_UPDATE,
+                com.legalcase.enums.EntityType.COMMENT,
+                commentId,
+                null,
+                oldContent,
+                newContent,
+                "Comment edited by " + userIdentifier,
+                true,
+                null);
 
         return comment;
     }
@@ -397,6 +469,17 @@ public class CommentService {
         String deleteReason = (reason != null && !reason.isEmpty()) ? reason : "No reason provided";
         commentRepository.softDeleteComment(commentId, now, user.getId(), deleteReason);
         log.info("Comment {} soft deleted", commentId);
+
+        // AUDIT: Comment deleted
+        recordAudit(com.legalcase.enums.AuditAction.COMMENT_DELETE,
+                com.legalcase.enums.EntityType.COMMENT,
+                commentId,
+                null,
+                comment,
+                null,
+                "Deleted by " + userIdentifier + ", reason: " + deleteReason,
+                true,
+                null);
     }
 
     // ============================================
