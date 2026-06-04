@@ -30,13 +30,10 @@ public class UserSearchController {
     private final UserService userService;
     private final JwtUtils jwtUtils;
 
-    @Operation(
-            summary = "Search users",
-            description = "Searches for users by username, email, or full name (exact match). Used for adding members to cases/tasks and @mentions."
-    )
+    @Operation(summary = "Search users", description = "Searches for active users by username, email, or full name.")
     @GetMapping("/search")
     public ResponseEntity<List<UserResponse>> searchUsers(
-            @Parameter(description = "Search term (username, email, or full name)") @RequestParam String q,
+            @Parameter(description = "Search term") @RequestParam String q,
             HttpServletRequest request) {
 
         extractUserId(request);
@@ -46,10 +43,7 @@ public class UserSearchController {
                 .collect(Collectors.toList()));
     }
 
-    @Operation(
-            summary = "Autocomplete users",
-            description = "Partial matching for UI autocomplete functionality."
-    )
+    @Operation(summary = "Autocomplete users", description = "Partial matching for UI autocomplete (active users only).")
     @GetMapping("/autocomplete")
     public ResponseEntity<List<UserResponse>> autocompleteUsers(
             @Parameter(description = "Partial search term") @RequestParam String partial,
@@ -62,18 +56,19 @@ public class UserSearchController {
                 .collect(Collectors.toList()));
     }
 
-    @Operation(
-            summary = "Get user by username",
-            description = "Retrieves user information by their unique username."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "User found"),
-            @ApiResponse(responseCode = "404", description = "User not found")
-    })
+    @Operation(summary = "Get user by username", description = "Retrieves active user by username.")
     @GetMapping("/username/{username}")
     public ResponseEntity<UserResponse> getUserByUsername(
             @Parameter(description = "Username") @PathVariable String username) {
         User user = userService.findByUsername(username);
+        return ResponseEntity.ok(UserResponse.fromEntity(user));
+    }
+
+    @Operation(summary = "Get user by email", description = "Retrieves active user by email.")
+    @GetMapping("/email/{email}")
+    public ResponseEntity<UserResponse> getUserByEmail(
+            @Parameter(description = "Email") @PathVariable String email) {
+        User user = userService.findByEmail(email);
         return ResponseEntity.ok(UserResponse.fromEntity(user));
     }
 

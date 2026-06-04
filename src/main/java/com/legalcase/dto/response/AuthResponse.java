@@ -10,7 +10,7 @@ public class AuthResponse {
     private String message;
     private boolean success;
     private UserResponse user;
-    private String token;  // JWT token
+    private String token;
 
     public static AuthResponse success(String message, UserResponse user) {
         return AuthResponse.builder()

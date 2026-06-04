@@ -6,15 +6,15 @@ import com.legalcase.exception.*;
 import com.legalcase.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @Slf4j
@@ -25,167 +25,14 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
-    @Transactional
-    public User registerUser(String username, String email, String password, String fullName, Role role) {
-        log.info("Attempting to register user with username: {}, email: {}", username, email);
+    // ============================================
+    // HELPER METHODS
+    // ============================================
 
-        validatePasswordStrength(password);
-
-        if (userRepository.existsByUsername(username)) {
-            log.error("Registration failed - username already exists: {}", username);
-            throw new DuplicateResourceException("Username", "username", username);
-        }
-
-        if (userRepository.existsByEmail(email)) {
-            log.error("Registration failed - email already exists: {}", email);
-            throw new DuplicateResourceException("User", "email", email);
-        }
-
-        User user = new User();
-        user.setUsername(username);
-        user.setEmail(email);
-        user.setFullName(fullName);
-        user.setRole(role != null ? role : Role.STAFF);
-        user.setActive(true);
-        user.setCreatedAt(LocalDateTime.now());
-        user.setUpdatedAt(LocalDateTime.now());
-
-        String encodedPassword = passwordEncoder.encode(password);
-        user.setPassword(encodedPassword);
-
-        User savedUser = userRepository.save(user);
-        log.info("User registered successfully with ID: {}", savedUser.getId());
-
-        return savedUser;
-    }
-
-    @Transactional
-    public User registerStaff(String username, String email, String password, String fullName) {
-        return registerUser(username, email, password, fullName, Role.STAFF);
-    }
-
-    @Transactional
-    public User authenticate(String email, String rawPassword) {
-        log.debug("Authenticating user: {}", email);
-
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new UnauthorizedException("Invalid email or password"));
-
-        if (!user.isActive()) {
-            log.warn("Authentication failed - inactive user: {}", email);
-            throw new UnauthorizedException("Account is deactivated. Please contact administrator.");
-        }
-
-        if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
-            log.warn("Authentication failed - incorrect password for: {}", email);
-            throw new UnauthorizedException("Invalid email or password");
-        }
-
-        user.setLastLoginAt(LocalDateTime.now());
-        userRepository.save(user);
-
-        log.info("User authenticated successfully: {}", email);
-        return user;
-    }
-
-    public User findById(Long id) {
-        log.debug("Finding user by ID: {}", id);
+    private User findActiveUserById(Long id) {
         return userRepository.findById(id)
+                .filter(u -> !u.isDeleted())
                 .orElseThrow(() -> new ResourceNotFoundException("User", id));
-    }
-
-    public User findByEmail(String email) {
-        log.debug("Finding user by email: {}", email);
-        return userRepository.findByEmail(email)
-                .orElseThrow(() -> new ResourceNotFoundException("User", "email", email));
-    }
-
-    public User findByUsername(String username) {
-        return userRepository.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User", "username", username));
-    }
-
-    public List<User> searchUsers(String searchTerm) {
-        if (searchTerm == null || searchTerm.trim().isEmpty()) {
-            return List.of();
-        }
-        return userRepository.findByUsernameOrEmailOrFullName(searchTerm.trim());
-    }
-
-    public List<User> autocompleteUsers(String partial) {
-        if (partial == null || partial.trim().isEmpty()) {
-            return List.of();
-        }
-        return userRepository.findByUsernameStartingWithOrFullNameStartingWith(partial.trim());
-    }
-
-    public List<User> getUsersByRole(Role role) {
-        log.debug("Finding users with role: {}", role);
-        return userRepository.findByRole(role);
-    }
-
-    public List<User> getAllLawyers() {
-        return getUsersByRole(Role.LAWYER);
-    }
-
-    public List<User> getAllStaff() {
-        return getUsersByRole(Role.STAFF);
-    }
-
-    public List<User> getActiveUsersByRole(Role role) {
-        log.debug("Finding active users with role: {}", role);
-        return userRepository.findActiveUsersByRole(role);
-    }
-
-    @Transactional
-    public void deactivateUser(Long userId, Long adminId) {
-        log.info("Admin {} deactivating user: {}", adminId, userId);
-
-        User user = findById(userId);
-
-        if (userId.equals(adminId)) {
-            throw new BusinessException("You cannot deactivate your own account");
-        }
-
-        user.setActive(false);
-        userRepository.save(user);
-
-        log.info("User {} deactivated successfully", userId);
-    }
-
-    @Transactional
-    public void activateUser(Long userId) {
-        log.info("Activating user: {}", userId);
-
-        User user = findById(userId);
-        user.setActive(true);
-        userRepository.save(user);
-
-        log.info("User {} activated successfully", userId);
-    }
-
-    @Transactional
-    public void updateLastLogin(Long userId) {
-        int updatedCount = userRepository.updateLastLoginTime(userId, LocalDateTime.now());
-        if (updatedCount == 0) {
-            log.warn("Failed to update last login for user: {}", userId);
-        }
-    }
-
-    public boolean isEmailAvailable(String email) {
-        return !userRepository.existsByEmail(email);
-    }
-
-    public boolean isUsernameAvailable(String username) {
-        return !userRepository.existsByUsername(username);
-    }
-
-    public long getTotalUserCount() {
-        return userRepository.count();
-    }
-
-    public long countUsersByRole(Role role) {
-        return userRepository.countByRole(role);
     }
 
     private void validatePasswordStrength(String password) {
@@ -197,7 +44,6 @@ public class UserService {
         boolean hasLowercase = false;
         boolean hasDigit = false;
         boolean hasSpecialChar = false;
-
         String specialChars = "@#$%^&+=!";
 
         for (char c : password.toCharArray()) {
@@ -221,62 +67,260 @@ public class UserService {
         }
     }
 
-    /**
-     * Delete a user by email.
-     * Only admins should be able to call this method.
-     *
-     * @param email Email of the user to delete
-     * @param adminId ID of admin performing the action (for audit)
-     */
+    // ============================================
+    // REGISTRATION & AUTHENTICATION
+    // ============================================
+
     @Transactional
-    public void deleteUserByEmail(String email, Long adminId) {
-        log.info("Admin {} deleting user with email: {}", adminId, email);
+    public User registerUser(String username, String email, String password, String fullName, Role role) {
+        log.info("Attempting to register user with username: {}, email: {}", username, email);
 
-        User user = findByEmail(email);
+        validatePasswordStrength(password);
 
-        // Prevent deleting yourself
+        if (userRepository.existsByUsernameAndIsDeletedFalse(username)) {
+            log.error("Registration failed - username already exists: {}", username);
+            throw new DuplicateResourceException("Username", "username", username);
+        }
+
+        if (userRepository.existsByEmailAndIsDeletedFalse(email)) {
+            log.error("Registration failed - email already exists: {}", email);
+            throw new DuplicateResourceException("User", "email", email);
+        }
+
+        User user = new User();
+        user.setUsername(username);
+        user.setEmail(email);
+        user.setFullName(fullName);
+        user.setRole(role != null ? role : Role.STAFF);
+        user.setActive(true);
+        user.setDeleted(false);
+
+        String encodedPassword = passwordEncoder.encode(password);
+        user.setPassword(encodedPassword);
+
+        User savedUser = userRepository.save(user);
+        log.info("User registered successfully with ID: {}", savedUser.getId());
+
+        return savedUser;
+    }
+
+    @Transactional
+    public User registerStaff(String username, String email, String password, String fullName) {
+        return registerUser(username, email, password, fullName, Role.STAFF);
+    }
+
+    @Transactional
+    public User authenticate(String identifier, String rawPassword) {
+        log.debug("Authenticating user: {}", identifier);
+
+        User user = userRepository.findByIdentifierAndIsDeletedFalse(identifier)
+                .orElseThrow(() -> new UnauthorizedException("Invalid username/email or password"));
+
+        if (!user.isActive()) {
+            log.warn("Authentication failed - inactive user: {}", identifier);
+            throw new UnauthorizedException("Account is deactivated. Please contact administrator.");
+        }
+
+        if (user.isDeleted()) {
+            log.warn("Authentication failed - deleted user: {}", identifier);
+            throw new UnauthorizedException("Account has been deleted. Please contact administrator.");
+        }
+
+        if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
+            log.warn("Authentication failed - incorrect password for: {}", identifier);
+            throw new UnauthorizedException("Invalid username/email or password");
+        }
+
+        user.setLastLoginAt(LocalDateTime.now());
+        userRepository.save(user);
+
+        log.info("User authenticated successfully: {}", identifier);
+        return user;
+    }
+
+    // ============================================
+    // PROFILE MANAGEMENT (User Dashboard)
+    // ============================================
+
+    @Transactional
+    public User updateProfile(Long userId, String newFullName, String newEmail, Long modifiedBy, String modifiedByName) {
+        log.info("User {} updating profile for user {}", modifiedBy, userId);
+
+        User user = findActiveUserById(userId);
+
+        // Check if email is being changed and if it's available
+        if (!user.getEmail().equals(newEmail)) {
+            if (userRepository.existsByEmailAndIsDeletedFalse(newEmail)) {
+                throw new DuplicateResourceException("Email", "email", newEmail);
+            }
+            userRepository.updateEmail(userId, newEmail, modifiedBy, modifiedByName);
+        }
+
+        // Update full name
+        if (!user.getFullName().equals(newFullName)) {
+            userRepository.updateFullName(userId, newFullName, modifiedBy, modifiedByName);
+        }
+
+        // Refresh user
+        return findActiveUserById(userId);
+    }
+
+    @Transactional
+    public void changePassword(Long userId, String currentPassword, String newPassword) {
+        log.info("User {} changing password", userId);
+
+        User user = findActiveUserById(userId);
+
+        if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
+            throw new UnauthorizedException("Current password is incorrect");
+        }
+
+        validatePasswordStrength(newPassword);
+
+        String encodedPassword = passwordEncoder.encode(newPassword);
+        int updated = userRepository.updatePassword(userId, encodedPassword);
+
+        if (updated == 0) {
+            throw new BusinessException("Failed to update password");
+        }
+
+        log.info("Password changed successfully for user {}", userId);
+    }
+
+    // ============================================
+    // FIND METHODS
+    // ============================================
+
+    public User findById(Long id) {
+        return findActiveUserById(id);
+    }
+
+    public User findByEmail(String email) {
+        return userRepository.findByEmailAndIsDeletedFalse(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "email", email));
+    }
+
+    public User findByUsername(String username) {
+        return userRepository.findByUsernameAndIsDeletedFalse(username)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "username", username));
+    }
+
+    public User findByIdentifier(String identifier) {
+        return userRepository.findByIdentifierAndIsDeletedFalse(identifier)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "username or email", identifier));
+    }
+
+    // ============================================
+    // SEARCH METHODS
+    // ============================================
+
+    public List<User> searchUsers(String searchTerm) {
+        if (searchTerm == null || searchTerm.trim().isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findByUsernameOrEmailOrFullNameAndIsDeletedFalse(searchTerm.trim());
+    }
+
+    public List<User> autocompleteUsers(String partial) {
+        if (partial == null || partial.trim().isEmpty()) {
+            return List.of();
+        }
+        return userRepository.findByUsernameStartingWithOrFullNameStartingWithAndIsDeletedFalse(partial.trim());
+    }
+
+    public List<User> getUsersByRole(Role role) {
+        return userRepository.findByRoleAndIsDeletedFalse(role);
+    }
+
+    public List<User> getAllLawyers() {
+        return getUsersByRole(Role.LAWYER);
+    }
+
+    public List<User> getAllStaff() {
+        return getUsersByRole(Role.STAFF);
+    }
+
+    public List<User> getActiveUsersByRole(Role role) {
+        return userRepository.findActiveUsersByRole(role);
+    }
+
+    public Page<User> findAllActiveUsers(Pageable pageable) {
+        return userRepository.findAllActive(pageable);
+    }
+
+    // ============================================
+    // ADMIN ACTIONS (with audit tracking)
+    // ============================================
+
+    @Transactional
+    public void softDeleteUser(Long userId, Long adminId, String adminName, String reason) {
+        log.info("Admin {} ({}), soft deleting user: {}", adminId, adminName, userId);
+
+        User user = findActiveUserById(userId);
+
         if (user.getId().equals(adminId)) {
             throw new BusinessException("You cannot delete your own account");
         }
 
-        userRepository.deleteByEmail(email);
-        log.info("User with email {} deleted successfully", email);
+        String deleteReason = (reason != null && !reason.isEmpty()) ? reason : "No reason provided";
+        userRepository.softDeleteById(userId, LocalDateTime.now(), adminId, deleteReason);
+
+        log.info("User {} soft deleted by admin {}", userId, adminId);
     }
 
-    /**
-     * Find all users with pagination (Admin only).
-     */
-    public Page<User> findAllUsers(Pageable pageable) {
-        log.debug("Finding all users with pagination");
-        return userRepository.findAll(pageable);
-    }
-
-    /**
-     * Delete user by ID (Admin only).
-     */
     @Transactional
-    public void deleteUserById(Long userId, Long adminId) {
-        log.info("Admin {} deleting user with ID: {}", adminId, userId);
+    public void reactivateUser(Long userId, Long adminId, String adminName, String reason) {
+        log.info("Admin {} ({}) reactivating user: {}", adminId, adminName, userId);
 
-        User user = findById(userId);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
 
-        // Prevent deleting yourself
-        if (user.getId().equals(adminId)) {
-            throw new BusinessException("You cannot delete your own account using admin endpoint. Use DELETE /auth/me instead.");
+        if (!user.isDeleted()) {
+            throw new BusinessException("User is not deleted");
         }
 
-        userRepository.deleteById(userId);
-        log.info("User with ID {} deleted successfully", userId);
+        userRepository.reactivateById(userId);
+
+        log.info("User {} reactivated by admin {}", userId, adminId);
     }
 
-    /**
-     * Update user role (Admin only).
-     */
     @Transactional
-    public User updateUserRole(Long userId, String roleName) {
-        log.info("Updating user {} role to: {}", userId, roleName);
+    public void deactivateUser(Long userId, Long adminId, String adminName) {
+        log.info("Admin {} ({}) deactivating user: {}", adminId, adminName, userId);
 
-        User user = findById(userId);
+        User user = findActiveUserById(userId);
+
+        if (user.getId().equals(adminId)) {
+            throw new BusinessException("You cannot deactivate your own account");
+        }
+
+        user.setActive(false);
+        user.setLastModifiedBy(adminId);
+        user.setLastModifiedByName(adminName);
+        userRepository.save(user);
+
+        log.info("User {} deactivated by admin {}", userId, adminId);
+    }
+
+    @Transactional
+    public void activateUser(Long userId, Long adminId, String adminName) {
+        log.info("Admin {} ({}) activating user: {}", adminId, adminName, userId);
+
+        User user = findActiveUserById(userId);
+
+        user.setActive(true);
+        user.setLastModifiedBy(adminId);
+        user.setLastModifiedByName(adminName);
+        userRepository.save(user);
+
+        log.info("User {} activated by admin {}", userId, adminId);
+    }
+
+    @Transactional
+    public User updateUserRole(Long userId, String roleName, Long adminId, String adminName) {
+        log.info("Admin {} ({}) updating user {} role to: {}", adminId, adminName, userId, roleName);
+
+        User user = findActiveUserById(userId);
         Role newRole;
 
         try {
@@ -286,7 +330,70 @@ public class UserService {
         }
 
         user.setRole(newRole);
+        user.setLastModifiedBy(adminId);
+        user.setLastModifiedByName(adminName);
+
+        log.info("User {} role updated to {} by admin {}", userId, newRole, adminId);
         return userRepository.save(user);
     }
 
+    @Transactional
+    public void permanentlyDeleteUser(Long userId, Long adminId, String adminName) {
+        log.info("Admin {} ({}) permanently deleting user: {}", adminId, adminName, userId);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
+
+        if (user.getId().equals(adminId)) {
+            throw new BusinessException("You cannot permanently delete your own account");
+        }
+
+        // Note: This will fail if user has foreign key references
+        userRepository.deleteById(userId);
+        log.info("User {} permanently deleted by admin {}", userId, adminId);
+    }
+
+    // ============================================
+    // STATISTICS
+    // ============================================
+
+    public long getTotalActiveUserCount() {
+        return userRepository.countActiveUsers();
+    }
+
+    public long countUsersByRole(Role role) {
+        return userRepository.countByRoleAndIsDeletedFalse(role);
+    }
+
+    public boolean isEmailAvailable(String email) {
+        return !userRepository.existsByEmailAndIsDeletedFalse(email);
+    }
+
+    public boolean isUsernameAvailable(String username) {
+        return !userRepository.existsByUsernameAndIsDeletedFalse(username);
+    }
+
+    @Transactional
+    public void updateLastLogin(Long userId) {
+        userRepository.updateLastLoginTime(userId, LocalDateTime.now());
+    }
+
+    // ============================================
+    // CLEANUP SCHEDULER METHOD
+    // ============================================
+
+    @Transactional
+    public int permanentlyDeleteSoftDeletedUsersOlderThan(int days) {
+        LocalDateTime cutoffDate = LocalDateTime.now().minusDays(days);
+        List<User> usersToDelete = userRepository.findSoftDeletedUsersOlderThan(cutoffDate);
+
+        int deletedCount = 0;
+        for (User user : usersToDelete) {
+            userRepository.deleteById(user.getId());
+            deletedCount++;
+            log.info("Permanently deleted soft-deleted user: {} (ID: {})", user.getUsername(), user.getId());
+        }
+
+        return deletedCount;
+    }
 }

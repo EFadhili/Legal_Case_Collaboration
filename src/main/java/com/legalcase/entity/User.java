@@ -13,10 +13,6 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 
-/**
- * User entity representing a person who can log into the system.
- * Each user has a role (ADMIN, LAWYER, STAFF) that determines their permissions.
- */
 @Entity
 @Table(name = "users")
 @Data
@@ -24,8 +20,6 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @EntityListeners(AuditingEntityListener.class)
 public class User {
-
-    // ===== PRIMARY KEY =====
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -51,15 +45,33 @@ public class User {
     private Role role;
 
     // ===== ACCOUNT STATUS FIELDS =====
-
     @Column(name = "is_active")
     private boolean isActive = true;
 
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
 
-    // ===== AUDIT FIELDS =====
+    // ===== SOFT DELETE FIELDS =====
+    @Column(name = "is_deleted")
+    private boolean isDeleted = false;
 
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
+    @Column(name = "deleted_by")
+    private Long deletedBy;
+
+    @Column(name = "deleted_reason")
+    private String deletedReason;
+
+    // ===== EDIT TRACKING FIELDS =====
+    @Column(name = "last_modified_by")
+    private Long lastModifiedBy;
+
+    @Column(name = "last_modified_by_name")
+    private String lastModifiedByName;
+
+    // ===== AUDIT FIELDS =====
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -70,28 +82,32 @@ public class User {
 
     // ===== HELPER METHODS =====
 
-    /**
-     * Checks if this user has administrative privileges.
-     * @return true if user role is ADMIN
-     */
     public boolean isAdmin() {
         return this.role == Role.ADMIN;
     }
 
-    /**
-     * Checks if this user is a lawyer.
-     * @return true if user role is LAWYER
-     */
     public boolean isLawyer() {
         return this.role == Role.LAWYER;
     }
 
-    /**
-     * Checks if this user is staff.
-     * @return true if user role is STAFF
-     */
     public boolean isStaff() {
         return this.role == Role.STAFF;
     }
-}
 
+    /**
+     * Get display name for UI (handles deleted users)
+     */
+    public String getDisplayName() {
+        if (isDeleted) {
+            return "[Deleted User] " + (fullName != null ? fullName : username);
+        }
+        return fullName != null ? fullName : username;
+    }
+
+    /**
+     * Check if user account is accessible (active and not deleted)
+     */
+    public boolean isAccessible() {
+        return isActive && !isDeleted;
+    }
+}

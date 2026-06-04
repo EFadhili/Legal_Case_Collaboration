@@ -2,7 +2,10 @@ package com.legalcase.repository;
 
 import com.legalcase.entity.User;
 import com.legalcase.enums.Role;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -11,101 +14,104 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Repository interface for User entity operations.
- * Spring Data JPA automatically implements all methods defined here.
- */
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
 
-    // ===== BASIC FIND METHODS (Spring implements by method name) =====
+    // ===== FIND METHODS (excluding soft-deleted users) =====
 
-    /**
-     * Find a user by their email address.
-     * Spring generates: SELECT u FROM User u WHERE u.email = ?1
-     */
-    Optional<User> findByEmail(String email);
+    Optional<User> findByEmailAndIsDeletedFalse(String email);
 
-    /**
-     * Check if a user exists with the given email.
-     * Spring generates: SELECT COUNT(u) > 0 FROM User u WHERE u.email = ?1
-     */
-    boolean existsByEmail(String email);
+    Optional<User> findByUsernameAndIsDeletedFalse(String username);
 
-    // NEW: Username-based methods
-    Optional<User> findByUsername(String username);
-    boolean existsByUsername(String username);
+    @Query("SELECT u FROM User u WHERE (u.email = :identifier OR u.username = :identifier) AND u.isDeleted = false")
+    Optional<User> findByIdentifierAndIsDeletedFalse(@Param("identifier") String identifier);
 
-    // Search methods (for adding members to cases/tasks)
-    @Query("SELECT u FROM User u WHERE u.username = :searchTerm OR u.email = :searchTerm OR u.fullName = :searchTerm")
-    List<User> findByUsernameOrEmailOrFullName(@Param("searchTerm") String searchTerm);
+    boolean existsByEmailAndIsDeletedFalse(String email);
 
-    // Partial search for autocomplete (future UI)
-    @Query("""
-SELECT u FROM User u
-WHERE LOWER(u.username) LIKE LOWER(CONCAT('%', :partial, '%'))
-   OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :partial, '%'))
-   OR LOWER(u.email) LIKE LOWER(CONCAT('%', :partial, '%'))
-""")
-    List<User> findByUsernameStartingWithOrFullNameStartingWith(
-            @Param("partial") String partial
-    );
-    /**
-     * Find all users with a specific role.
-     * Spring generates: SELECT u FROM User u WHERE u.role = ?1
-     */
-    List<User> findByRole(Role role);
+    boolean existsByUsernameAndIsDeletedFalse(String username);
 
-    /**
-     * Find users whose full name contains the given text (case-insensitive).
-     * Spring generates: SELECT u FROM User u WHERE LOWER(u.fullName) LIKE LOWER(CONCAT('%', ?1, '%'))
-     */
-    List<User> findByFullNameContainingIgnoreCase(String namePart);
+    List<User> findByRoleAndIsDeletedFalse(Role role);
 
-    /**
-     * Find users who have logged in after a specific date.
-     * Spring generates: SELECT u FROM User u WHERE u.lastLoginAt > ?1
-     */
-    List<User> findByLastLoginAtAfter(LocalDateTime date);
-
-    /**
-     * Count how many users have a specific role.
-     * Spring generates: SELECT COUNT(u) FROM User u WHERE u.role = ?1
-     */
-    long countByRole(Role role);
-
-    // ===== CUSTOM QUERIES (using @Query when method name isn't enough) =====
-
-    /**
-     * Find active users (isActive = true) with a specific role.
-     * Using @Query because the condition combines two fields.
-     */
-    @Query("SELECT u FROM User u WHERE u.isActive = true AND u.role = :role")
+    @Query("SELECT u FROM User u WHERE u.isActive = true AND u.role = :role AND u.isDeleted = false")
     List<User> findActiveUsersByRole(@Param("role") Role role);
 
-    /**
-     * Find users who haven't logged in for a certain number of days.
-     * Using native SQL for date arithmetic that differs between databases.
-     */
-    @Query(value = "SELECT * FROM users WHERE last_login_at < :cutoffDate", nativeQuery = true)
-    List<User> findInactiveUsersSince(@Param("cutoffDate") LocalDateTime cutoffDate);
+    @Query("SELECT u FROM User u WHERE u.username = :searchTerm OR u.email = :searchTerm OR u.fullName = :searchTerm AND u.isDeleted = false")
+    List<User> findByUsernameOrEmailOrFullNameAndIsDeletedFalse(@Param("searchTerm") String searchTerm);
 
-    /**
-     * Update a user's last login time.
-     * Using @Modifying for UPDATE operations.
-     */
+    @Query("""
+        SELECT u FROM User u
+        WHERE u.isDeleted = false AND (
+            LOWER(u.username) LIKE LOWER(CONCAT('%', :partial, '%'))
+            OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :partial, '%'))
+            OR LOWER(u.email) LIKE LOWER(CONCAT('%', :partial, '%'))
+        )
+    """)
+    List<User> findByUsernameStartingWithOrFullNameStartingWithAndIsDeletedFalse(@Param("partial") String partial);
+
+    @Query("SELECT u FROM User u WHERE u.isDeleted = false")
+    Page<User> findAllActive(Pageable pageable);
+
+    @Query("SELECT u FROM User u WHERE u.isDeleted = true AND u.deletedAt < :cutoffDate")
+    List<User> findSoftDeletedUsersOlderThan(@Param("cutoffDate") LocalDateTime cutoffDate);
+
+    @Query("SELECT u FROM User u WHERE u.isDeleted = false AND u.isActive = true")
+    List<User> findAllAccessible();
+
+    // ===== UPDATE METHODS =====
+
+    @Modifying
     @Query("UPDATE User u SET u.lastLoginAt = :loginTime WHERE u.id = :userId")
     int updateLastLoginTime(@Param("userId") Long userId, @Param("loginTime") LocalDateTime loginTime);
 
-    // ===== DELETE METHODS =====
+    @Modifying
+    @Query("UPDATE User u SET u.password = :newPassword WHERE u.id = :userId AND u.isDeleted = false")
+    int updatePassword(@Param("userId") Long userId, @Param("newPassword") String newPassword);
 
-    /**
-     * Delete a user by email.
-     * Spring generates: DELETE FROM User u WHERE u.email = ?1
-     */
+    @Modifying
+    @Query("UPDATE User u SET u.email = :newEmail, u.lastModifiedBy = :modifiedBy, u.lastModifiedByName = :modifiedByName WHERE u.id = :userId AND u.isDeleted = false")
+    int updateEmail(@Param("userId") Long userId, @Param("newEmail") String newEmail,
+                    @Param("modifiedBy") Long modifiedBy, @Param("modifiedByName") String modifiedByName);
+
+    @Modifying
+    @Query("UPDATE User u SET u.fullName = :fullName, u.lastModifiedBy = :modifiedBy, u.lastModifiedByName = :modifiedByName WHERE u.id = :userId AND u.isDeleted = false")
+    int updateFullName(@Param("userId") Long userId, @Param("fullName") String fullName,
+                       @Param("modifiedBy") Long modifiedBy, @Param("modifiedByName") String modifiedByName);
+
+    // ===== SOFT DELETE METHODS =====
+
+    @Modifying
+    @Query("UPDATE User u SET u.isDeleted = true, u.deletedAt = :deletedAt, u.deletedBy = :deletedBy, u.deletedReason = :deletedReason, u.isActive = false WHERE u.id = :userId")
+    void softDeleteById(@Param("userId") Long userId, @Param("deletedAt") LocalDateTime deletedAt,
+                        @Param("deletedBy") Long deletedBy, @Param("deletedReason") String deletedReason);
+
+    @Modifying
+    @Query("UPDATE User u SET u.isDeleted = false, u.deletedAt = null, u.deletedBy = null, u.deletedReason = null, u.isActive = true WHERE u.id = :userId")
+    void reactivateById(@Param("userId") Long userId);
+
+    // ===== COUNT METHODS =====
+
+    long countByRoleAndIsDeletedFalse(Role role);
+
+    @Query("SELECT COUNT(u) FROM User u WHERE u.isDeleted = false")
+    long countActiveUsers();
+
+    // ===== LEGACY METHODS (deprecated - use new ones) =====
+
+    @Deprecated
+    Optional<User> findByEmail(String email);
+
+    @Deprecated
+    Optional<User> findByUsername(String username);
+
+    @Deprecated
+    boolean existsByEmail(String email);
+
+    @Deprecated
+    boolean existsByUsername(String username);
+
+    @Deprecated
+    List<User> findByRole(Role role);
+
+    @Deprecated
     void deleteByEmail(String email);
 }
-
-
-
-

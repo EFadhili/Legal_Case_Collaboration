@@ -7,10 +7,6 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
-/**
- * DTO for sending user data to clients.
- * Notice: NO password field!
- */
 @Data
 @Builder
 public class UserResponse {
@@ -19,30 +15,31 @@ public class UserResponse {
     private String username;
     private String email;
     private String fullName;
+    private String displayName;
     private Role role;
     private boolean isActive;
+    private boolean isDeleted;
     private LocalDateTime lastLoginAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private LocalDateTime deletedAt;
+    private String deletedReason;
 
-    /**
-     * Convert User entity to UserResponse DTO.
-     * This hides sensitive fields like password.
-     */
     public static UserResponse fromEntity(User user) {
         return UserResponse.builder()
                 .id(user.getId())
                 .username(user.getUsername())
                 .email(user.getEmail())
                 .fullName(user.getFullName())
+                .displayName(user.getDisplayName())
                 .role(user.getRole())
                 .isActive(user.isActive())
+                .isDeleted(user.isDeleted())
                 .lastLoginAt(user.getLastLoginAt())
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())
+                .deletedAt(user.getDeletedAt())
+                .deletedReason(user.getDeletedReason())
                 .build();
     }
 }
-
-
-

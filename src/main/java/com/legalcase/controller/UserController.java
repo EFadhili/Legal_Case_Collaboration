@@ -1,5 +1,6 @@
 package com.legalcase.controller;
 
+import com.legalcase.dto.request.ReactivateUserRequest;
 import com.legalcase.dto.response.UserResponse;
 import com.legalcase.entity.User;
 import com.legalcase.security.JwtUtils;
@@ -29,59 +30,68 @@ public class UserController {
     private final UserService userService;
     private final JwtUtils jwtUtils;
 
-    @Operation(summary = "Get all users (paginated)", description = "Admin only. Returns all users in the system.")
+    @Operation(summary = "Get all active users (paginated)", description = "Admin only. Returns all active (non-deleted) users.")
     @GetMapping
     public ResponseEntity<Page<UserResponse>> getAllUsers(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest request) {
 
-        verifyAdmin(request);
-        Page<User> users = userService.findAllUsers(PageRequest.of(page, size));
+        Long adminId = verifyAdmin(request);
+        Page<User> users = userService.findAllActiveUsers(PageRequest.of(page, size));
         return ResponseEntity.ok(users.map(UserResponse::fromEntity));
     }
 
-    @Operation(summary = "Delete user by ID", description = "Admin only. Permanently deletes a user account.")
+    @Operation(summary = "Soft delete user", description = "Admin only. Soft deletes a user account (30-day retention).")
     @DeleteMapping("/{userId}")
-    public ResponseEntity<Void> deleteUserById(
+    public ResponseEntity<Void> softDeleteUser(
             @Parameter(description = "User ID to delete") @PathVariable Long userId,
+            @RequestParam(required = false) String reason,
             HttpServletRequest request) {
 
         Long adminId = verifyAdmin(request);
-        userService.deleteUserById(userId, adminId);
+        String adminName = extractUserIdentifier(request);
+        userService.softDeleteUser(userId, adminId, adminName, reason);
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(summary = "Delete user by email", description = "Admin only. Permanently deletes a user account.")
-    @DeleteMapping("/email/{email}")
-    public ResponseEntity<Void> deleteUserByEmail(
-            @Parameter(description = "Email of user to delete") @PathVariable String email,
-            HttpServletRequest request) {
+    @Operation(summary = "Reactivate user", description = "Admin only. Reactivates a soft-deleted user account.")
+    @PatchMapping("/{userId}/reactivate")
+    public ResponseEntity<UserResponse> reactivateUser(
+            @Parameter(description = "User ID to reactivate") @PathVariable Long userId,
+            @RequestBody(required = false) ReactivateUserRequest request,
+            HttpServletRequest httpRequest) {
 
-        Long adminId = verifyAdmin(request);
-        userService.deleteUserByEmail(email, adminId);
-        return ResponseEntity.noContent().build();
+        Long adminId = verifyAdmin(httpRequest);
+        String adminName = extractUserIdentifier(httpRequest);
+        String reason = request != null ? request.getReason() : null;
+
+        userService.reactivateUser(userId, adminId, adminName, reason);
+        User user = userService.findById(userId);
+        return ResponseEntity.ok(UserResponse.fromEntity(user));
     }
 
-    @Operation(summary = "Deactivate user", description = "Admin only. Deactivates a user account.")
+    @Operation(summary = "Deactivate user", description = "Admin only. Deactivates a user account (cannot login).")
     @PatchMapping("/{userId}/deactivate")
     public ResponseEntity<Void> deactivateUser(
             @Parameter(description = "User ID to deactivate") @PathVariable Long userId,
             HttpServletRequest request) {
 
         Long adminId = verifyAdmin(request);
-        userService.deactivateUser(userId, adminId);
+        String adminName = extractUserIdentifier(request);
+        userService.deactivateUser(userId, adminId, adminName);
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(summary = "Activate user", description = "Admin only. Reactivates a user account.")
+    @Operation(summary = "Activate user", description = "Admin only. Reactivates a deactivated user account.")
     @PatchMapping("/{userId}/activate")
     public ResponseEntity<Void> activateUser(
             @Parameter(description = "User ID to activate") @PathVariable Long userId,
             HttpServletRequest request) {
 
-        verifyAdmin(request);
-        userService.activateUser(userId);
+        Long adminId = verifyAdmin(request);
+        String adminName = extractUserIdentifier(request);
+        userService.activateUser(userId, adminId, adminName);
         return ResponseEntity.noContent().build();
     }
 
@@ -92,9 +102,22 @@ public class UserController {
             @Parameter(description = "New role (ADMIN, LAWYER, STAFF)") @PathVariable String role,
             HttpServletRequest request) {
 
-        verifyAdmin(request);
-        User user = userService.updateUserRole(userId, role);
+        Long adminId = verifyAdmin(request);
+        String adminName = extractUserIdentifier(request);
+        User user = userService.updateUserRole(userId, role, adminId, adminName);
         return ResponseEntity.ok(UserResponse.fromEntity(user));
+    }
+
+    @Operation(summary = "Permanently delete user", description = "Admin only. Permanently deletes a user. Use with caution!")
+    @DeleteMapping("/{userId}/permanent")
+    public ResponseEntity<Void> permanentlyDeleteUser(
+            @Parameter(description = "User ID to permanently delete") @PathVariable Long userId,
+            HttpServletRequest request) {
+
+        Long adminId = verifyAdmin(request);
+        String adminName = extractUserIdentifier(request);
+        userService.permanentlyDeleteUser(userId, adminId, adminName);
+        return ResponseEntity.noContent().build();
     }
 
     private Long verifyAdmin(HttpServletRequest request) {
@@ -109,6 +132,11 @@ public class UserController {
     private Long extractUserId(HttpServletRequest request) {
         String token = extractToken(request);
         return jwtUtils.getUserIdFromToken(token);
+    }
+
+    private String extractUserIdentifier(HttpServletRequest request) {
+        String token = extractToken(request);
+        return jwtUtils.getEmailFromToken(token);
     }
 
     private String extractToken(HttpServletRequest request) {
