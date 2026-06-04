@@ -545,10 +545,10 @@ src/main/java/com/legalcase/
 
 ---
 
-## Authors
+## Author
 
-- **Elton Fadhili Mumalasi** - *Initial work* - (https://github.com/EFadhili)
-
+- **Elton Fadhili Mumalasi**
+  - GitHub: https://github.com/EFadhili
 ---
 
 ## Acknowledgments
@@ -556,12 +556,6 @@ src/main/java/com/legalcase/
 - Spring Boot team for the excellent framework
 - Google for Gemini AI API
 - AWS for cloud infrastructure
-
----
-
-## Support
-
-For support, email support@legalcase.com or open an issue in the repository.
 
 ---
 
