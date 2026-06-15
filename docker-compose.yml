@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: legalcase-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-legalcase_db}
+      POSTGRES_USER: ${DB_USER:-legalcase_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-legalcase_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - legalcase-network
+
+  # Redis (for WebSocket sessions)
+  redis:
+    image: redis:7-alpine
+    container_name: legalcase-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - legalcase-network
+
+  # Spring Boot Backend Application
+  backend:
+    build: .
+    container_name: legalcase-backend
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${DB_NAME:-legalcase_db}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-legalcase_user}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      APP_JWT_SECRET: ${JWT_SECRET}
+      APP_JWT_EXPIRATION: 86400000
+      CLOUD_AWS_REGION: ${AWS_REGION:-eu-north-1}
+      CLOUD_AWS_S3_BUCKET: ${S3_BUCKET}
+      AWS_ACCESS_KEY: ${AWS_ACCESS_KEY}
+      AWS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-prod}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - legalcase-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  legalcase-network:
+    driver: bridge

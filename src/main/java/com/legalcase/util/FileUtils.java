@@ -1,10 +1,5 @@
 package com.legalcase.util;
 
-import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.model.ObjectMetadata;
-import com.amazonaws.services.s3.model.PutObjectRequest;
-import com.amazonaws.services.s3.model.S3Object;
-import com.amazonaws.services.s3.model.S3ObjectInputStream;
 import com.legalcase.entity.LegalCase;
 import com.legalcase.entity.Task;
 import lombok.RequiredArgsConstructor;
@@ -17,17 +12,23 @@ import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.Loader;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
-import org.apache.pdfbox.Loader;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.*;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 
 import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Date;
 import java.util.UUID;
 
 @Component
@@ -35,7 +36,8 @@ import java.util.UUID;
 @Slf4j
 public class FileUtils {
 
-    private final AmazonS3 amazonS3;
+    private final S3Client s3Client;
+    private final S3Presigner s3Presigner;
 
     @Value("${cloud.aws.s3.bucket}")
     private String bucketName;
@@ -102,11 +104,8 @@ public class FileUtils {
     public String sanitizeFilename(String filename) {
         if (filename == null) return null;
 
-        // Remove path traversal
         String sanitized = filename.replaceAll("[/\\\\:*?\"<>|]", "_");
-        // Replace spaces with underscores
         sanitized = sanitized.replace(' ', '_');
-        // Limit length
         if (sanitized.length() > 200) {
             String extension = getFileExtension(sanitized);
             String nameWithoutExt = sanitized.substring(0, 200 - extension.length() - 1);
@@ -118,7 +117,8 @@ public class FileUtils {
     public String generateStorageFileName(String originalFilename) {
         String extension = getFileExtension(originalFilename);
         String uniqueId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        String nameWithoutExt = originalFilename.substring(0, originalFilename.lastIndexOf('.'));
+        int lastDotIndex = originalFilename.lastIndexOf('.');
+        String nameWithoutExt = lastDotIndex > 0 ? originalFilename.substring(0, lastDotIndex) : originalFilename;
         String sanitizedBase = sanitizeFilename(nameWithoutExt);
         return uniqueId + "_" + sanitizedBase + "." + extension;
     }
@@ -139,7 +139,6 @@ public class FileUtils {
         return basePath + "/" + datePath + "/" + fileName;
     }
 
-    // Overloaded method for backward compatibility
     public String generateStoragePath(Long caseId, Long taskId, String fileName) {
         String basePath;
         if (caseId != null) {
@@ -158,21 +157,17 @@ public class FileUtils {
 
     public String uploadToS3(MultipartFile file, String storagePath) {
         try {
-            ObjectMetadata metadata = new ObjectMetadata();
-            metadata.setContentLength(file.getSize());
-            metadata.setContentType(file.getContentType());
-            metadata.setContentDisposition("inline; filename=\"" + file.getOriginalFilename() + "\"");
+            PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(storagePath)
+                    .contentType(file.getContentType())
+                    .contentDisposition("inline; filename=\"" + file.getOriginalFilename() + "\"")
+                    .build();
 
-            PutObjectRequest request = new PutObjectRequest(
-                    bucketName,
-                    storagePath,
-                    file.getInputStream(),
-                    metadata
-            );
+            s3Client.putObject(putObjectRequest,
+                    RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
 
-            amazonS3.putObject(request);
             log.info("File uploaded to S3: {}/{}", bucketName, storagePath);
-
             return storagePath;
 
         } catch (Exception e) {
@@ -183,8 +178,13 @@ public class FileUtils {
 
     public InputStream downloadFromS3(String storagePath) {
         try {
-            S3Object s3Object = amazonS3.getObject(bucketName, storagePath);
-            return s3Object.getObjectContent();
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(storagePath)
+                    .build();
+
+            return s3Client.getObject(getObjectRequest);
+
         } catch (Exception e) {
             log.error("Failed to download from S3: {}", e.getMessage());
             throw new RuntimeException("Failed to download file: " + e.getMessage());
@@ -193,19 +193,37 @@ public class FileUtils {
 
     public String generatePresignedUrl(String storagePath) {
         try {
-            Date expiration = new Date(System.currentTimeMillis() + 24 * 60 * 60 * 1000);
-            URL url = amazonS3.generatePresignedUrl(bucketName, storagePath, expiration);
-            return url.toString();
+            GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+                    .signatureDuration(Duration.ofHours(24))
+                    .getObjectRequest(GetObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key(storagePath)
+                            .build())
+                    .build();
+
+            PresignedGetObjectRequest presignedRequest = s3Presigner.presignGetObject(presignRequest);
+            return presignedRequest.url().toString();
+
         } catch (Exception e) {
             log.error("Failed to generate presigned URL: {}", e.getMessage());
-            return amazonS3.getUrl(bucketName, storagePath).toString();
+            // Fallback - construct URL manually (without presigned signature)
+            return String.format("https://%s.s3.%s.amazonaws.com/%s",
+                    bucketName,
+                    s3Client.serviceClientConfiguration().region().id(),
+                    storagePath);
         }
     }
 
     public void deleteFromS3(String storagePath) {
         try {
-            amazonS3.deleteObject(bucketName, storagePath);
+            DeleteObjectRequest deleteObjectRequest = DeleteObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(storagePath)
+                    .build();
+
+            s3Client.deleteObject(deleteObjectRequest);
             log.info("File deleted from S3: {}/{}", bucketName, storagePath);
+
         } catch (Exception e) {
             log.error("Failed to delete from S3: {}", e.getMessage());
             throw new RuntimeException("Failed to delete file from storage: " + e.getMessage());
@@ -214,7 +232,16 @@ public class FileUtils {
 
     public boolean existsInS3(String storagePath) {
         try {
-            return amazonS3.doesObjectExist(bucketName, storagePath);
+            HeadObjectRequest headObjectRequest = HeadObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(storagePath)
+                    .build();
+
+            s3Client.headObject(headObjectRequest);
+            return true;
+
+        } catch (NoSuchKeyException e) {
+            return false;
         } catch (Exception e) {
             log.error("Failed to check existence in S3: {}", e.getMessage());
             return false;
