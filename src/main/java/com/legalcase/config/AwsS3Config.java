@@ -1,46 +1,51 @@
 package com.legalcase.config;
 
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.AWSStaticCredentialsProvider;
-import com.amazonaws.auth.BasicAWSCredentials;
-import com.amazonaws.client.builder.AwsClientBuilder;
-import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Profile;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 @Configuration
-@Profile("!test")  // Disable this config in test profile
-public class AwsS3Config {
-
-    @Value("${cloud.aws.credentials.access-key}")
-    private String accessKey;
-
-    @Value("${cloud.aws.credentials.secret-key}")
-    private String secretKey;
+public class AwsConfig {
 
     @Value("${cloud.aws.region}")
     private String region;
 
-    @Value("${cloud.aws.s3.bucket}")
-    private String bucketName;
+    @Value("${aws.access.key.id:}")
+    private String accessKeyId;
+
+    @Value("${aws.secret.access.key:}")
+    private String secretAccessKey;
 
     @Bean
-    public AmazonS3 amazonS3() {
-        AWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+    public S3Client s3Client() {
+        var builder = S3Client.builder()
+                .region(Region.of(region));
 
-        return AmazonS3ClientBuilder
-                .standard()
-                .withCredentials(new AWSStaticCredentialsProvider(credentials))
-                .withRegion(region)
-                .build();
+        if (accessKeyId != null && !accessKeyId.isEmpty() && secretAccessKey != null && !secretAccessKey.isEmpty()) {
+            builder.credentialsProvider(StaticCredentialsProvider.create(
+                    AwsBasicCredentials.create(accessKeyId, secretAccessKey)
+            ));
+        }
+
+        return builder.build();
     }
 
-    public String getBucketName() {
-        return bucketName;
+    @Bean
+    public S3Presigner s3Presigner() {
+        var builder = S3Presigner.builder()
+                .region(Region.of(region));
+
+        if (accessKeyId != null && !accessKeyId.isEmpty() && secretAccessKey != null && !secretAccessKey.isEmpty()) {
+            builder.credentialsProvider(StaticCredentialsProvider.create(
+                    AwsBasicCredentials.create(accessKeyId, secretAccessKey)
+            ));
+        }
+
+        return builder.build();
     }
 }
-
