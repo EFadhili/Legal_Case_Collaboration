@@ -39,8 +39,8 @@ public class AuthController {
                     request.getUsername(),
                     request.getEmail(),
                     request.getPassword(),
-                    request.getFullName(),
-                    request.getRole()
+                    request.getFullName()
+                    // Role removed - always STAFF
             );
 
             String token = jwtUtils.generateToken(

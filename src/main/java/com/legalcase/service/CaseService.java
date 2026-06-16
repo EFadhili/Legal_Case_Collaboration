@@ -1,9 +1,6 @@
 package com.legalcase.service;
 
-import com.legalcase.exception.DuplicateResourceException;
-import com.legalcase.exception.InvalidStatusTransitionException;
-import com.legalcase.exception.ResourceNotFoundException;
-import com.legalcase.exception.UnauthorizedException;
+import com.legalcase.exception.*;
 import com.legalcase.dto.response.MemberResponse;
 import com.legalcase.entity.CaseMember;
 import com.legalcase.entity.LegalCase;
@@ -22,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.Year;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -41,7 +39,7 @@ public class CaseService {
     private final CaseMemberRepository caseMemberRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
-    private final AuditService auditService;  // ADDED
+    private final AuditService auditService;
 
     // ============================================
     // HELPER METHODS
@@ -154,6 +152,12 @@ public class CaseService {
                 .collect(Collectors.toList());
     }
 
+    private void verifyCaseNotDeleted(LegalCase legalCase) {
+        if (legalCase.isDeleted()) {
+            throw new InvalidStatusTransitionException("Cannot perform actions on a deleted case");
+        }
+    }
+
     // ============================================
     // CREATE
     // ============================================
@@ -166,10 +170,6 @@ public class CaseService {
 
         User owner = findUserByIdentifier(ownerIdentifier);
         log.info("Owner found: {} with role: {}", owner.getUsername(), owner.getRole());
-
-        if (!owner.isLawyer() && !owner.isAdmin()) {
-            throw new UnauthorizedException("Only lawyers and admins can create cases. Your role: " + owner.getRole());
-        }
 
         LegalCase legalCase = new LegalCase();
         legalCase.setCaseNumber(generateCaseNumber());
@@ -186,9 +186,8 @@ public class CaseService {
         LegalCase saved = caseRepository.save(legalCase);
         log.info("Case created with number: {}, owner: {}", saved.getCaseNumber(), saved.getOwner().getUsername());
 
-        // Add owner as member
         addMemberToCaseByIdentifier(saved.getCaseNumber(), owner.getUsername(), CaseMemberRole.LAWYER, owner.getUsername());
-        log.info("Owner added as member to case: {}", saved.getCaseNumber());
+        log.info("Owner added as lawyer to case: {}", saved.getCaseNumber());
 
         if (assignedUserIdentifiers != null && !assignedUserIdentifiers.isEmpty()) {
             for (String userIdentifier : assignedUserIdentifiers) {
@@ -201,9 +200,6 @@ public class CaseService {
             }
         }
 
-        log.info("Case created with number: {}", saved.getCaseNumber());
-
-        // AUDIT: Case created
         recordAudit(AuditAction.CASE_CREATE, EntityType.CASE,
                 saved.getId(), saved.getCaseNumber(),
                 null, saved,
@@ -220,6 +216,7 @@ public class CaseService {
     public LegalCase getCase(String caseIdentifier, String userIdentifier) {
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseAccess(legalCase, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
         return legalCase;
     }
 
@@ -232,8 +229,11 @@ public class CaseService {
         List<LegalCase> ownedCases = caseRepository.findByOwnerIdWithDetails(userId);
         List<LegalCase> memberCases = caseRepository.findCasesByMemberIdWithDetails(userId);
 
-        ownedCases.addAll(memberCases);
-        return ownedCases.stream().distinct().collect(Collectors.toList());
+        // Filter out deleted cases
+        List<LegalCase> activeCases = new ArrayList<>();
+        activeCases.addAll(ownedCases.stream().filter(c -> !c.isDeleted()).collect(Collectors.toList()));
+        activeCases.addAll(memberCases.stream().filter(c -> !c.isDeleted()).collect(Collectors.toList()));
+        return activeCases.stream().distinct().collect(Collectors.toList());
     }
 
     public Page<LegalCase> getMyCasesPaginated(String userIdentifier, int page, int size) {
@@ -244,7 +244,8 @@ public class CaseService {
 
     public List<LegalCase> getLockedCases(String userIdentifier) {
         verifyAdminAccess(userIdentifier);
-        return caseRepository.findByIsLockedWithDetails(true);
+        List<LegalCase> cases = caseRepository.findByIsLockedWithDetails(true);
+        return cases.stream().filter(c -> !c.isDeleted()).collect(Collectors.toList());
     }
 
     public Page<LegalCase> getAllCasesPaginated(String userIdentifier, int page, int size) {
@@ -360,6 +361,8 @@ public class CaseService {
         log.info("User {} attempting to update case {} status to {}", userIdentifier, caseIdentifier, newStatus);
 
         LegalCase legalCase = findCase(caseIdentifier);
+        verifyCaseAccess(legalCase, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
         verifyCaseModification(legalCase, userIdentifier);
 
         if (!legalCase.canTransitionTo(newStatus)) {
@@ -381,7 +384,6 @@ public class CaseService {
         caseRepository.save(legalCase);
         log.info("Case {} status updated to {}", legalCase.getCaseNumber(), newStatus);
 
-        // AUDIT: Case status changed
         recordAudit(AuditAction.CASE_STATUS_CHANGE, EntityType.CASE,
                 legalCase.getId(), legalCase.getCaseNumber(),
                 oldStatus, newStatus,
@@ -394,13 +396,14 @@ public class CaseService {
     @Transactional
     public LegalCase updatePriority(String caseIdentifier, CasePriority priority, String userIdentifier) {
         LegalCase legalCase = findCase(caseIdentifier);
+        verifyCaseAccess(legalCase, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
         verifyCaseModification(legalCase, userIdentifier);
 
         CasePriority oldPriority = legalCase.getPriority();
         legalCase.setPriority(priority);
         caseRepository.save(legalCase);
 
-        // AUDIT: Case priority changed
         recordAudit(AuditAction.CASE_PRIORITY_CHANGE, EntityType.CASE,
                 legalCase.getId(), legalCase.getCaseNumber(),
                 oldPriority, priority,
@@ -413,13 +416,14 @@ public class CaseService {
     @Transactional
     public LegalCase updateDueDate(String caseIdentifier, LocalDate dueDate, String userIdentifier) {
         LegalCase legalCase = findCase(caseIdentifier);
+        verifyCaseAccess(legalCase, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
         verifyCaseModification(legalCase, userIdentifier);
 
         LocalDate oldDueDate = legalCase.getDueDate();
         legalCase.setDueDate(dueDate);
         caseRepository.save(legalCase);
 
-        // AUDIT: Case due date changed
         recordAudit(AuditAction.CASE_UPDATE, EntityType.CASE,
                 legalCase.getId(), legalCase.getCaseNumber(),
                 oldDueDate, dueDate,
@@ -440,11 +444,12 @@ public class CaseService {
             throw new UnauthorizedException("Only admins can lock/unlock cases");
         }
 
+        verifyCaseNotDeleted(legalCase);
+
         boolean oldLocked = legalCase.isLocked();
         legalCase.setLocked(locked);
         caseRepository.save(legalCase);
 
-        // AUDIT: Case lock status changed
         recordAudit(locked ? AuditAction.CASE_LOCK : AuditAction.CASE_UNLOCK, EntityType.CASE,
                 legalCase.getId(), legalCase.getCaseNumber(),
                 oldLocked, locked,
@@ -465,6 +470,7 @@ public class CaseService {
 
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseModification(legalCase, addedByUserIdentifier);
+        verifyCaseNotDeleted(legalCase);
 
         if (legalCase.isLocked()) {
             throw new InvalidStatusTransitionException("Cannot add members to a locked case");
@@ -476,36 +482,36 @@ public class CaseService {
             throw new DuplicateResourceException("User is already a member of this case");
         }
 
-        validateUserRoleForCaseRole(userToAdd, role);
+        CaseMemberRole actualRole = role != null ? role : CaseMemberRole.STAFF;
 
         CaseMember caseMember = new CaseMember();
         caseMember.setLegalCase(legalCase);
         caseMember.setUser(userToAdd);
-        caseMember.setRole(role);
+        caseMember.setRole(actualRole);
 
         User addedBy = findUserByIdentifier(addedByUserIdentifier);
         notificationService.notifyUserAddedToCase(userToAdd.getId(), legalCase.getId(), addedBy.getId());
 
-        log.info("User '{}' (ID: {}) added to case {} as {}", userIdentifierToAdd, userToAdd.getId(), legalCase.getCaseNumber(), role);
+        log.info("User '{}' (ID: {}) added to case {} as {}", userIdentifierToAdd, userToAdd.getId(), legalCase.getCaseNumber(), actualRole);
 
         CaseMember saved = caseMemberRepository.save(caseMember);
 
-        // AUDIT: Member added to case
         recordAudit(AuditAction.CASE_MEMBER_ADD, EntityType.CASE_MEMBER,
                 saved.getId(), null,
                 null, saved,
-                "User " + userToAdd.getUsername() + " added as " + role + " to case " + legalCase.getCaseNumber(),
+                "User " + userToAdd.getUsername() + " added as " + actualRole + " to case " + legalCase.getCaseNumber(),
                 true, null);
 
         return saved;
     }
 
     @Transactional
-    public List<CaseMember> addMembersToCaseByIdentifiers(String caseIdentifier, List<String> userIdentifiersToAdd, CaseMemberRole role, String addedByUserIdentifier) {
-        log.info("Adding {} users to case {} with role {}", userIdentifiersToAdd.size(), caseIdentifier, role);
+    public List<CaseMember> addMembersToCaseByIdentifiers(String caseIdentifier, List<String> userIdentifiersToAdd, String addedByUserIdentifier) {
+        log.info("Adding {} users to case {}", userIdentifiersToAdd.size(), caseIdentifier);
 
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseModification(legalCase, addedByUserIdentifier);
+        verifyCaseNotDeleted(legalCase);
 
         if (legalCase.isLocked()) {
             throw new InvalidStatusTransitionException("Cannot add members to a locked case");
@@ -516,6 +522,13 @@ public class CaseService {
         List<String> notFoundUsers = new ArrayList<>();
         List<String> alreadyMembers = new ArrayList<>();
 
+        boolean isOwner = legalCase.getOwner().getId().equals(addedBy.getId());
+        boolean isLawyer = caseMemberRepository.isLawyerInCase(legalCase.getId(), addedBy.getId());
+
+        if (!isOwner && !isLawyer) {
+            throw new AccessDeniedException("Only case owners and case lawyers can add members to this case");
+        }
+
         for (String identifier : userIdentifiersToAdd) {
             try {
                 User userToAdd = findUserByIdentifier(identifier);
@@ -525,23 +538,22 @@ public class CaseService {
                     continue;
                 }
 
-                validateUserRoleForCaseRole(userToAdd, role);
-
                 CaseMember caseMember = new CaseMember();
                 caseMember.setLegalCase(legalCase);
                 caseMember.setUser(userToAdd);
-                caseMember.setRole(role);
+                caseMember.setRole(CaseMemberRole.STAFF);
 
                 CaseMember saved = caseMemberRepository.save(caseMember);
                 addedMembers.add(saved);
 
                 notificationService.notifyUserAddedToCase(userToAdd.getId(), legalCase.getId(), addedBy.getId());
 
-                // AUDIT: Member added to case (individual audit for each)
+                log.info("User {} added to case {} as STAFF", userToAdd.getUsername(), legalCase.getCaseNumber());
+
                 recordAudit(AuditAction.CASE_MEMBER_ADD, EntityType.CASE_MEMBER,
                         saved.getId(), null,
                         null, saved,
-                        "User " + userToAdd.getUsername() + " added as " + role + " to case " + legalCase.getCaseNumber(),
+                        "User " + userToAdd.getUsername() + " added as STAFF to case " + legalCase.getCaseNumber() + " by " + addedBy.getUsername(),
                         true, null);
 
             } catch (ResourceNotFoundException e) {
@@ -569,6 +581,7 @@ public class CaseService {
     public List<MemberResponse> getCaseMembers(String caseIdentifier, String userIdentifier) {
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseAccess(legalCase, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
 
         List<CaseMember> members = caseMemberRepository.findByLegalCaseWithDetails(legalCase);
         return members.stream()
@@ -582,6 +595,7 @@ public class CaseService {
 
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseModification(legalCase, adminUserIdentifier);
+        verifyCaseNotDeleted(legalCase);
 
         if (legalCase.isLocked()) {
             throw new InvalidStatusTransitionException("Cannot remove members from a locked case");
@@ -599,7 +613,6 @@ public class CaseService {
 
         caseMemberRepository.deleteByLegalCaseAndUser(legalCase, userToRemove);
 
-        // AUDIT: Member removed from case
         recordAudit(AuditAction.CASE_MEMBER_REMOVE, EntityType.CASE_MEMBER,
                 null, null,
                 null, null,
@@ -614,6 +627,7 @@ public class CaseService {
     public int getCaseProgressPercentage(String caseIdentifier, String userIdentifier) {
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseAccess(legalCase, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
 
         long totalMandatory = caseRepository.countMandatoryTasksByCaseId(legalCase.getId());
         if (totalMandatory == 0) {
@@ -626,12 +640,14 @@ public class CaseService {
     public boolean isReadyForInProgress(String caseIdentifier, String userIdentifier) {
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseAccess(legalCase, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
         return caseRepository.countMandatoryTasksByCaseId(legalCase.getId()) > 0;
     }
 
     public boolean isReadyForClosed(String caseIdentifier, String userIdentifier) {
         LegalCase legalCase = findCase(caseIdentifier);
         verifyCaseAccess(legalCase, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
 
         long totalMandatory = caseRepository.countMandatoryTasksByCaseId(legalCase.getId());
         if (totalMandatory == 0) {
@@ -664,19 +680,22 @@ public class CaseService {
         LegalCase legalCase = findCase(caseIdentifier);
         User user = findUserByIdentifier(userIdentifier);
 
+        // Check if already deleted
+        if (legalCase.isDeleted()) {
+            throw new InvalidStatusTransitionException("Case is already deleted");
+        }
+
         boolean isCreator = legalCase.getOwner().getId().equals(user.getId());
-        boolean isCaseLawyer = caseMemberRepository.findByLegalCaseAndUser(legalCase, user)
-                .map(member -> member.getRole() == CaseMemberRole.LAWYER)
-                .orElse(false);
+        boolean isCaseLawyer = caseMemberRepository.isLawyerInCase(legalCase.getId(), user.getId());
 
         if (!isCreator && !isCaseLawyer && !user.isAdmin()) {
             throw new UnauthorizedException("Only case creator, case lawyers, or admins can delete this case");
         }
 
         caseRepository.softDeleteById(legalCase.getId());
+
         log.info("Case {} soft deleted successfully", legalCase.getCaseNumber());
 
-        // AUDIT: Case soft deleted
         recordAudit(AuditAction.CASE_DELETE, EntityType.CASE,
                 legalCase.getId(), legalCase.getCaseNumber(),
                 legalCase, null,
@@ -691,10 +710,15 @@ public class CaseService {
         verifyAdminAccess(userIdentifier);
 
         LegalCase legalCase = findCase(caseIdentifier);
+
+        // Check if it's actually deleted
+        if (!legalCase.isDeleted()) {
+            throw new InvalidStatusTransitionException("Case is not deleted");
+        }
+
         caseRepository.restoreById(legalCase.getId());
         log.info("Case {} restored successfully", legalCase.getCaseNumber());
 
-        // AUDIT: Case restored
         recordAudit(AuditAction.CASE_RESTORE, EntityType.CASE,
                 legalCase.getId(), legalCase.getCaseNumber(),
                 null, legalCase,
@@ -763,19 +787,6 @@ public class CaseService {
         }
     }
 
-    private void validateUserRoleForCaseRole(User user, CaseMemberRole caseRole) {
-        switch (caseRole) {
-            case LAWYER:
-                if (!user.isLawyer() && !user.isAdmin()) {
-                    throw new InvalidStatusTransitionException("User '" + user.getUsername() +
-                            "' cannot be assigned as LAWYER. User must have LAWYER or ADMIN system role.");
-                }
-                break;
-            case STAFF:
-                break;
-        }
-    }
-
     private String generateCaseNumber() {
         int currentYear = Year.now().getValue();
         long nextNumber = caseRepository.count() + 1;
@@ -786,5 +797,92 @@ public class CaseService {
             caseNumber = String.format("CASE-%d-%05d", currentYear, nextNumber);
         }
         return caseNumber;
+    }
+
+    // NEW: Promote case member to LAWYER
+    @Transactional
+    public CaseMember promoteMemberToLawyer(String caseIdentifier, String userIdentifierToPromote, String promotedByUserIdentifier) {
+        log.info("User {} promoting {} to lawyer in case {}",
+                promotedByUserIdentifier, userIdentifierToPromote, caseIdentifier);
+
+        LegalCase legalCase = findCase(caseIdentifier);
+        User promoter = findUserByIdentifier(promotedByUserIdentifier);
+        User userToPromote = findUserByIdentifier(userIdentifierToPromote);
+
+        verifyCaseNotDeleted(legalCase);
+
+        boolean isOwner = legalCase.getOwner().getId().equals(promoter.getId());
+        boolean isLawyer = caseMemberRepository.isLawyerInCase(legalCase.getId(), promoter.getId());
+
+        if (!isOwner && !isLawyer) {
+            throw new AccessDeniedException("Only case owners and case lawyers can promote members to lawyer");
+        }
+
+        if (legalCase.isLocked()) {
+            throw new InvalidStatusTransitionException("Cannot promote members in a locked case");
+        }
+
+        CaseMember caseMember = caseMemberRepository.findByLegalCaseAndUser(legalCase, userToPromote)
+                .orElseThrow(() -> new ResourceNotFoundException("User is not a member of this case"));
+
+        if (caseMember.getRole() == CaseMemberRole.LAWYER) {
+            throw new DuplicateResourceException("User is already a lawyer in this case");
+        }
+
+        caseMember.setRole(CaseMemberRole.LAWYER);
+        CaseMember saved = caseMemberRepository.save(caseMember);
+
+        recordAudit(AuditAction.CASE_MEMBER_ADD, EntityType.CASE_MEMBER,
+                saved.getId(), null,
+                null, saved,
+                "User " + userToPromote.getUsername() + " promoted to LAWYER by " + promoter.getUsername(),
+                true, null);
+
+        log.info("User {} promoted to lawyer in case {}", userIdentifierToPromote, caseIdentifier);
+        return saved;
+    }
+
+    // NEW: Demote case lawyer to STAFF (Owner only)
+    @Transactional
+    public CaseMember demoteLawyerToStaff(String caseIdentifier, String userIdentifierToDemote, String demotedByUserIdentifier) {
+        log.info("User {} demoting {} from lawyer to staff in case {}",
+                demotedByUserIdentifier, userIdentifierToDemote, caseIdentifier);
+
+        LegalCase legalCase = findCase(caseIdentifier);
+        User demoter = findUserByIdentifier(demotedByUserIdentifier);
+        User userToDemote = findUserByIdentifier(userIdentifierToDemote);
+
+        verifyCaseNotDeleted(legalCase);
+
+        if (!legalCase.getOwner().getId().equals(demoter.getId())) {
+            throw new AccessDeniedException("Only the case owner can demote lawyers to staff");
+        }
+
+        if (legalCase.isLocked()) {
+            throw new InvalidStatusTransitionException("Cannot demote members in a locked case");
+        }
+
+        if (legalCase.getOwner().getId().equals(userToDemote.getId())) {
+            throw new InvalidStatusTransitionException("Cannot demote the case owner");
+        }
+
+        CaseMember caseMember = caseMemberRepository.findByLegalCaseAndUser(legalCase, userToDemote)
+                .orElseThrow(() -> new ResourceNotFoundException("User is not a member of this case"));
+
+        if (caseMember.getRole() != CaseMemberRole.LAWYER) {
+            throw new BusinessException("User is not a lawyer in this case");
+        }
+
+        caseMember.setRole(CaseMemberRole.STAFF);
+        CaseMember saved = caseMemberRepository.save(caseMember);
+
+        recordAudit(AuditAction.CASE_MEMBER_REMOVE, EntityType.CASE_MEMBER,
+                saved.getId(), null,
+                null, saved,
+                "User " + userToDemote.getUsername() + " demoted to STAFF by owner " + demoter.getUsername(),
+                true, null);
+
+        log.info("User {} demoted to staff in case {}", userIdentifierToDemote, caseIdentifier);
+        return saved;
     }
 }

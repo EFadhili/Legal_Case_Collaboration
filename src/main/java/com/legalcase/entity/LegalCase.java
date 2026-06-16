@@ -63,6 +63,12 @@ public class LegalCase {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    @Column(name = "deleted_by")
+    private Long deletedBy;  // This must exist
+
+    @Column(name = "deleted_reason")
+    private String deletedReason;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "owner_id", nullable = false)
     private User owner;
@@ -95,4 +101,3 @@ public class LegalCase {
         return !isLocked && (status == CaseStatus.OPEN || status == CaseStatus.IN_PROGRESS);
     }
 }
-

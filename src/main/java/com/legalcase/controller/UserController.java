@@ -95,19 +95,6 @@ public class UserController {
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(summary = "Update user role", description = "Admin only. Changes a user's role.")
-    @PatchMapping("/{userId}/role/{role}")
-    public ResponseEntity<UserResponse> updateUserRole(
-            @Parameter(description = "User ID") @PathVariable Long userId,
-            @Parameter(description = "New role (ADMIN, LAWYER, STAFF)") @PathVariable String role,
-            HttpServletRequest request) {
-
-        Long adminId = verifyAdmin(request);
-        String adminName = extractUserIdentifier(request);
-        User user = userService.updateUserRole(userId, role, adminId, adminName);
-        return ResponseEntity.ok(UserResponse.fromEntity(user));
-    }
-
     @Operation(summary = "Permanently delete user", description = "Admin only. Permanently deletes a user. Use with caution!")
     @DeleteMapping("/{userId}/permanent")
     public ResponseEntity<Void> permanentlyDeleteUser(
@@ -146,4 +133,29 @@ public class UserController {
         }
         return authHeader.substring(7);
     }
+
+    @Operation(summary = "Promote user to ADMIN", description = "Admin only. Promotes a STAFF user to ADMIN.")
+    @PatchMapping("/{userId}/promote-admin")
+    public ResponseEntity<UserResponse> promoteToAdmin(
+            @Parameter(description = "User ID") @PathVariable Long userId,
+            HttpServletRequest request) {
+
+        Long adminId = verifyAdmin(request);
+        String adminName = extractUserIdentifier(request);
+        User user = userService.promoteToAdmin(userId, adminId, adminName);
+        return ResponseEntity.ok(UserResponse.fromEntity(user));
+    }
+
+    @Operation(summary = "Demote ADMIN to STAFF", description = "Admin only. Demotes an ADMIN user to STAFF.")
+    @PatchMapping("/{userId}/demote-staff")
+    public ResponseEntity<UserResponse> demoteToStaff(
+            @Parameter(description = "User ID") @PathVariable Long userId,
+            HttpServletRequest request) {
+
+        Long adminId = verifyAdmin(request);
+        String adminName = extractUserIdentifier(request);
+        User user = userService.demoteToStaff(userId, adminId, adminName);
+        return ResponseEntity.ok(UserResponse.fromEntity(user));
+    }
+
 }

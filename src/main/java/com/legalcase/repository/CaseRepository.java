@@ -161,15 +161,18 @@ public interface CaseRepository extends JpaRepository<LegalCase, Long> {
             "LEFT JOIN FETCH c.owner")
     Page<LegalCase> findAllPaged(Pageable pageable);
 
+    // ============================================
+    // SOFT DELETE METHODS
+    // ============================================
 
-    // Soft delete by ID
+    // Soft delete by ID with status change to ARCHIVED
     @Modifying
-    @Query("UPDATE LegalCase c SET c.isDeleted = true, c.deletedAt = CURRENT_TIMESTAMP WHERE c.id = :caseId")
+    @Query("UPDATE LegalCase c SET c.isDeleted = true, c.status = 'ARCHIVED', c.deletedAt = CURRENT_TIMESTAMP WHERE c.id = :caseId")
     void softDeleteById(@Param("caseId") Long caseId);
 
-    // Soft delete by case number
+    // Soft delete by case number with status change to ARCHIVED
     @Modifying
-    @Query("UPDATE LegalCase c SET c.isDeleted = true, c.deletedAt = CURRENT_TIMESTAMP WHERE c.caseNumber = :caseNumber")
+    @Query("UPDATE LegalCase c SET c.isDeleted = true, c.status = 'ARCHIVED', c.deletedAt = CURRENT_TIMESTAMP WHERE c.caseNumber = :caseNumber")
     void softDeleteByCaseNumber(@Param("caseNumber") String caseNumber);
 
     // Find active cases (not deleted) - override default findById
@@ -184,9 +187,9 @@ public interface CaseRepository extends JpaRepository<LegalCase, Long> {
             "WHERE c.caseNumber = :caseNumber AND c.isDeleted = false")
     Optional<LegalCase> findActiveByCaseNumber(@Param("caseNumber") String caseNumber);
 
-    // Restore a soft-deleted case
+    // Restore a soft-deleted case (set status back to OPEN or CLOSED? Keeping as OPEN for safety)
     @Modifying
-    @Query("UPDATE LegalCase c SET c.isDeleted = false, c.deletedAt = null WHERE c.id = :caseId")
+    @Query("UPDATE LegalCase c SET c.isDeleted = false, c.status = 'OPEN', c.deletedAt = null WHERE c.id = :caseId")
     void restoreById(@Param("caseId") Long caseId);
 
     // Permanently delete (hard delete) soft-deleted cases older than cutoff
@@ -194,9 +197,7 @@ public interface CaseRepository extends JpaRepository<LegalCase, Long> {
     @Query("DELETE FROM LegalCase c WHERE c.isDeleted = true AND c.deletedAt < :cutoffDate")
     int permanentlyDeleteOldCases(@Param("cutoffDate") LocalDateTime cutoffDate);
 
-    /**
-     * Find all soft-deleted cases with details.
-     */
+    // Find all soft-deleted cases with details
     @Query("SELECT DISTINCT c FROM LegalCase c " +
             "LEFT JOIN FETCH c.owner " +
             "WHERE c.isDeleted = true")

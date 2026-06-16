@@ -1,15 +1,14 @@
 package com.legalcase.dto.request;
 
-import com.legalcase.enums.Role;
-import jakarta.validation.constraints.*;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
-/**
- * DTO for user registration requests.
- * Contains validation annotations that Spring automatically checks.
- */
 @Data
 public class RegisterRequest {
+
     @NotBlank(message = "Username is required")
     @Size(min = 3, max = 20, message = "Username must be between 3 and 20 characters")
     @Pattern(regexp = "^[a-zA-Z0-9._-]+$", message = "Username can only contain letters, numbers, dots, underscores, and hyphens")
@@ -34,8 +33,5 @@ public class RegisterRequest {
     @Pattern(regexp = "^[a-zA-Z\\s'-]+$", message = "Full name can only contain letters, spaces, apostrophes, and hyphens")
     private String fullName;
 
-    // Optional: If not provided, defaults to STAFF in service
-    private Role role;
+    // Role field REMOVED - users always register as STAFF
 }
-
-

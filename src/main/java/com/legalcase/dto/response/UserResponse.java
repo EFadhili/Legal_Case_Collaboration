@@ -16,7 +16,7 @@ public class UserResponse {
     private String email;
     private String fullName;
     private String displayName;
-    private Role role;
+    private Role role;  // Only ADMIN or STAFF now
     private boolean isActive;
     private boolean isDeleted;
     private LocalDateTime lastLoginAt;

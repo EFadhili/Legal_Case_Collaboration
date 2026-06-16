@@ -38,7 +38,7 @@ public class DocumentService {
     private final FileUtils fileUtils;
     private final DocumentProcessingService processingService;
     private final NotificationService notificationService;
-    private final AuditService auditService;  // ADDED
+    private final AuditService auditService;
 
     // ============================================
     // HELPER METHODS
@@ -85,10 +85,9 @@ public class DocumentService {
         }
     }
 
+    // UPDATED: Document access with new role system
     private void verifyDocumentAccess(Document document, User user) {
         boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
-        boolean isUploader = document.getUploadedBy().getId().equals(user.getId());
 
         if (isAdmin) {
             return;
@@ -106,26 +105,20 @@ public class DocumentService {
         }
 
         boolean isCaseMember = caseMemberRepository.existsByLegalCaseAndUser(legalCase, user);
+        boolean isCaseLawyer = caseMemberRepository.isLawyerInCase(legalCase.getId(), user.getId());
+        boolean isUploader = document.getUploadedBy().getId().equals(user.getId());
 
-        if (isLawyer && isCaseMember) {
-            return;
-        }
-
-        if (isUploader) {
-            return;
-        }
-
-        if (isCaseMember) {
+        // Case lawyers, case members, and uploader can access
+        if (isCaseLawyer || isCaseMember || isUploader) {
             return;
         }
 
         throw new AccessDeniedException("You don't have permission to access this document");
     }
 
+    // UPDATED: Document delete permission with new role system
     private void verifyDocumentDeletePermission(Document document, User user) {
         boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
-        boolean isUploader = document.getUploadedBy().getId().equals(user.getId());
 
         if (isAdmin) {
             return;
@@ -138,23 +131,43 @@ public class DocumentService {
             legalCase = document.getTask().getLegalCase();
         }
 
-        if (legalCase != null && isLawyer && caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
-            return;
+        if (legalCase == null) {
+            throw new BusinessException("Document has no associated case");
         }
 
-        if (isUploader) {
+        boolean isCaseLawyer = caseMemberRepository.isLawyerInCase(legalCase.getId(), user.getId());
+        boolean isUploader = document.getUploadedBy().getId().equals(user.getId());
+
+        if (isCaseLawyer || isUploader) {
             return;
         }
 
         throw new AccessDeniedException("You don't have permission to delete this document");
     }
 
+    // UPDATED: Document update permission with new role system
     private void verifyDocumentUpdatePermission(Document document, User user) {
         boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
+
+        if (isAdmin) {
+            return;
+        }
+
+        LegalCase legalCase = null;
+        if (document.getLegalCase() != null) {
+            legalCase = document.getLegalCase();
+        } else if (document.getTask() != null) {
+            legalCase = document.getTask().getLegalCase();
+        }
+
+        if (legalCase == null) {
+            throw new BusinessException("Document has no associated case");
+        }
+
+        boolean isCaseLawyer = caseMemberRepository.isLawyerInCase(legalCase.getId(), user.getId());
         boolean isUploader = document.getUploadedBy().getId().equals(user.getId());
 
-        if (isAdmin || isLawyer || isUploader) {
+        if (isCaseLawyer || isUploader) {
             return;
         }
 

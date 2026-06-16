@@ -25,7 +25,6 @@ public class User {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // ===== AUTHENTICATION FIELDS =====
     @Column(nullable = false, unique = true)
     @Size(min = 3, max = 20, message = "Username must be between 3 and 20 characters")
     @Pattern(regexp = "^[a-zA-Z0-9._-]+$", message = "Username can only contain letters, numbers, dots, underscores, and hyphens")
@@ -42,16 +41,15 @@ public class User {
 
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)
-    private Role role;
+    private Role role = Role.STAFF;  // Default is STAFF
 
-    // ===== ACCOUNT STATUS FIELDS =====
     @Column(name = "is_active")
     private boolean isActive = true;
 
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
 
-    // ===== SOFT DELETE FIELDS =====
+    // Soft delete fields
     @Column(name = "is_deleted")
     private boolean isDeleted = false;
 
@@ -64,14 +62,13 @@ public class User {
     @Column(name = "deleted_reason")
     private String deletedReason;
 
-    // ===== EDIT TRACKING FIELDS =====
+    // Edit tracking
     @Column(name = "last_modified_by")
     private Long lastModifiedBy;
 
     @Column(name = "last_modified_by_name")
     private String lastModifiedByName;
 
-    // ===== AUDIT FIELDS =====
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -80,23 +77,15 @@ public class User {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
-    // ===== HELPER METHODS =====
-
+    // Helper methods
     public boolean isAdmin() {
         return this.role == Role.ADMIN;
-    }
-
-    public boolean isLawyer() {
-        return this.role == Role.LAWYER;
     }
 
     public boolean isStaff() {
         return this.role == Role.STAFF;
     }
 
-    /**
-     * Get display name for UI (handles deleted users)
-     */
     public String getDisplayName() {
         if (isDeleted) {
             return "[Deleted User] " + (fullName != null ? fullName : username);
@@ -104,9 +93,6 @@ public class User {
         return fullName != null ? fullName : username;
     }
 
-    /**
-     * Check if user account is accessible (active and not deleted)
-     */
     public boolean isAccessible() {
         return isActive && !isDeleted;
     }

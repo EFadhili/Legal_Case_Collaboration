@@ -44,7 +44,7 @@ public class ChatService {
     private final TaskRepository taskRepository;
     private final NotificationService notificationService;
     private final ApplicationEventPublisher eventPublisher;
-    private final AuditService auditService;  // ADDED
+    private final AuditService auditService;
 
     // ============================================
     // HELPER METHODS
@@ -175,6 +175,11 @@ public class ChatService {
         if (!caseMemberRepository.existsByLegalCaseAndUser(legalCase, user)) {
             throw new AccessDeniedException("Only case members can participate in this chat.");
         }
+    }
+
+    // UPDATED: Check if user is a lawyer in a case (case-based)
+    private boolean isUserLawyerInCase(Long caseId, Long userId) {
+        return caseMemberRepository.isLawyerInCase(caseId, userId);
     }
 
     // ============================================
@@ -331,7 +336,7 @@ public class ChatService {
 
         LocalDateTime now = LocalDateTime.now();
         boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
+        boolean isCaseLawyer = isUserLawyerInCase(message.getLegalCase().getId(), user.getId());
         boolean isSender = message.getSender().getId().equals(user.getId());
         boolean isWithinTimeLimit = message.getSentAt().isAfter(now.minusMinutes(5));
 
@@ -340,8 +345,8 @@ public class ChatService {
             log.info("Admin {} deleted message {} from case {}",
                     userIdentifier, messageId, message.getLegalCase().getCaseNumber());
         }
-        else if (isLawyer) {
-            log.info("Lawyer {} deleted message {} from case {}",
+        else if (isCaseLawyer) {
+            log.info("Case lawyer {} deleted message {} from case {}",
                     userIdentifier, messageId, message.getLegalCase().getCaseNumber());
         }
         else if (isSender && isWithinTimeLimit) {
@@ -398,7 +403,7 @@ public class ChatService {
 
         LocalDateTime now = LocalDateTime.now();
         boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
+        boolean isCaseLawyer = isUserLawyerInCase(message.getLegalCase().getId(), user.getId());
         boolean isSender = message.getSender().getId().equals(user.getId());
         boolean isWithinTimeLimit = message.getSentAt().isAfter(now.minusMinutes(10)); // 10 min edit window
 
@@ -406,8 +411,8 @@ public class ChatService {
         if (isAdmin) {
             log.info("Admin {} editing message {}", userIdentifier, messageId);
         }
-        else if (isLawyer) {
-            log.info("Lawyer {} editing message {}", userIdentifier, messageId);
+        else if (isCaseLawyer) {
+            log.info("Case lawyer {} editing message {}", userIdentifier, messageId);
         }
         else if (isSender && isWithinTimeLimit) {
             log.info("User {} editing their own message within time limit", userIdentifier);

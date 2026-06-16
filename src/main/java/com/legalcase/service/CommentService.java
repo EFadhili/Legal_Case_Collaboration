@@ -35,7 +35,7 @@ public class CommentService {
     private final UserRepository userRepository;
     private final CaseMemberRepository caseMemberRepository;
     private final NotificationService notificationService;
-    private final AuditService auditService;  // ADDED
+    private final AuditService auditService;
 
     // ============================================
     // HELPER METHODS
@@ -97,9 +97,9 @@ public class CommentService {
         verifyCaseMembership(legalCase, user);
     }
 
+    // UPDATED: Check if user is a lawyer in the case (case-based, not system-wide)
     private boolean isUserLawyerInCase(LegalCase legalCase, Long userId) {
-        User user = userRepository.findById(userId).orElse(null);
-        return user != null && user.getRole() == Role.LAWYER;
+        return caseMemberRepository.isLawyerInCase(legalCase.getId(), userId);
     }
 
     // ============================================
@@ -365,8 +365,12 @@ public class CommentService {
                 .orElseThrow(() -> new ResourceNotFoundException("Case", caseId));
         verifyCaseMembership(legalCase, user);
 
-        if (user.getRole() != Role.ADMIN && user.getRole() != Role.LAWYER) {
-            throw new AccessDeniedException("Only admins and lawyers can view deleted comments");
+        // UPDATED: Only admins and case lawyers can view deleted comments
+        boolean isAdmin = user.getRole() == Role.ADMIN;
+        boolean isCaseLawyer = isUserLawyerInCase(legalCase, user.getId());
+
+        if (!isAdmin && !isCaseLawyer) {
+            throw new AccessDeniedException("Only admins and case lawyers can view deleted comments");
         }
 
         return commentRepository.findDeletedCommentsByCase(legalCase);
@@ -389,15 +393,15 @@ public class CommentService {
 
         LocalDateTime now = LocalDateTime.now();
         boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
         boolean isAuthor = comment.getAuthor().getId().equals(user.getId());
+        boolean isCaseLawyer = isUserLawyerInCase(legalCase, user.getId());
         boolean isWithinTimeLimit = comment.getCreatedAt().isAfter(now.minusMinutes(10));
 
         if (isAdmin) {
             log.info("Admin {} editing comment {}", userIdentifier, commentId);
         }
-        else if (isLawyer && isUserLawyerInCase(legalCase, user.getId())) {
-            log.info("Lawyer {} editing comment {}", userIdentifier, commentId);
+        else if (isCaseLawyer) {
+            log.info("Case lawyer {} editing comment {}", userIdentifier, commentId);
         }
         else if (isAuthor && isWithinTimeLimit) {
             log.info("User {} editing their own comment within time limit", userIdentifier);
@@ -446,15 +450,15 @@ public class CommentService {
 
         LocalDateTime now = LocalDateTime.now();
         boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
         boolean isAuthor = comment.getAuthor().getId().equals(user.getId());
+        boolean isCaseLawyer = isUserLawyerInCase(legalCase, user.getId());
         boolean isWithinTimeLimit = comment.getCreatedAt().isAfter(now.minusMinutes(5));
 
         if (isAdmin) {
             log.info("Admin {} deleting comment {}", userIdentifier, commentId);
         }
-        else if (isLawyer && isUserLawyerInCase(legalCase, user.getId())) {
-            log.info("Lawyer {} deleting comment {}", userIdentifier, commentId);
+        else if (isCaseLawyer) {
+            log.info("Case lawyer {} deleting comment {}", userIdentifier, commentId);
         }
         else if (isAuthor && isWithinTimeLimit) {
             log.info("User {} deleting their own comment within time limit", userIdentifier);

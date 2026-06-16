@@ -1,6 +1,8 @@
 package com.legalcase.service;
 
 import com.legalcase.entity.User;
+import com.legalcase.enums.AuditAction;
+import com.legalcase.enums.EntityType;
 import com.legalcase.enums.Role;
 import com.legalcase.exception.*;
 import com.legalcase.repository.UserRepository;
@@ -97,7 +99,7 @@ public class UserService {
     // ============================================
 
     @Transactional
-    public User registerUser(String username, String email, String password, String fullName, Role role) {
+    public User registerUser(String username, String email, String password, String fullName) {
         log.info("Attempting to register user with username: {}, email: {}", username, email);
 
         validatePasswordStrength(password);
@@ -116,7 +118,7 @@ public class UserService {
         user.setUsername(username);
         user.setEmail(email);
         user.setFullName(fullName);
-        user.setRole(role != null ? role : Role.STAFF);
+        user.setRole(Role.STAFF);  // Always STAFF by default
         user.setActive(true);
         user.setDeleted(false);
 
@@ -124,26 +126,18 @@ public class UserService {
         user.setPassword(encodedPassword);
 
         User savedUser = userRepository.save(user);
-        log.info("User registered successfully with ID: {}", savedUser.getId());
+        log.info("User registered successfully with ID: {}, role: STAFF", savedUser.getId());
 
         // AUDIT: User registration
-        recordAudit(com.legalcase.enums.AuditAction.USER_CREATE,
-                com.legalcase.enums.EntityType.USER,
-                savedUser.getId(),
-                savedUser.getUsername(),
-                null,
-                savedUser,
-                "User registered with role: " + role,
-                true,
-                null);
+        recordAudit(AuditAction.USER_CREATE, EntityType.USER,
+                savedUser.getId(), savedUser.getUsername(),
+                null, savedUser,
+                "User registered as STAFF",
+                true, null);
 
         return savedUser;
     }
 
-    @Transactional
-    public User registerStaff(String username, String email, String password, String fullName) {
-        return registerUser(username, email, password, fullName, Role.STAFF);
-    }
 
     @Transactional
     public User authenticate(String identifier, String rawPassword) {
@@ -374,17 +368,6 @@ public class UserService {
         return userRepository.findByRoleAndIsDeletedFalse(role);
     }
 
-    public List<User> getAllLawyers() {
-        return getUsersByRole(Role.LAWYER);
-    }
-
-    public List<User> getAllStaff() {
-        return getUsersByRole(Role.STAFF);
-    }
-
-    public List<User> getActiveUsersByRole(Role role) {
-        return userRepository.findActiveUsersByRole(role);
-    }
 
     public Page<User> findAllActiveUsers(Pageable pageable) {
         return userRepository.findAllActive(pageable);
@@ -501,39 +484,83 @@ public class UserService {
                 null);
     }
 
+    // NEW: Promote user to ADMIN (Admin only)
     @Transactional
-    public User updateUserRole(Long userId, String roleName, Long adminId, String adminName) {
-        log.info("Admin {} ({}) updating user {} role to: {}", adminId, adminName, userId, roleName);
+    public User promoteToAdmin(Long userId, Long adminId, String adminName) {
+        log.info("Admin {} promoting user {} to ADMIN", adminId, userId);
 
         User user = findActiveUserById(userId);
-        Role oldRole = user.getRole();
-        Role newRole;
 
-        try {
-            newRole = Role.valueOf(roleName.toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new ValidationException("role", "Invalid role. Must be ADMIN, LAWYER, or STAFF");
+        if (user.getRole() == Role.ADMIN) {
+            throw new BusinessException("User is already an ADMIN");
         }
 
-        user.setRole(newRole);
+        // Prevent self-promotion (admin is already admin)
+        if (user.getId().equals(adminId)) {
+            throw new BusinessException("You are already an ADMIN");
+        }
+
+        user.setRole(Role.ADMIN);
         user.setLastModifiedBy(adminId);
         user.setLastModifiedByName(adminName);
 
         User updatedUser = userRepository.save(user);
-        log.info("User {} role updated to {} by admin {}", userId, newRole, adminId);
 
-        // AUDIT: User role changed
-        recordAudit(com.legalcase.enums.AuditAction.USER_ROLE_CHANGE,
-                com.legalcase.enums.EntityType.USER,
-                userId,
-                user.getUsername(),
-                oldRole,
-                newRole,
-                "Role changed from " + oldRole + " to " + newRole + " by admin " + adminName,
-                true,
-                null);
+        // AUDIT: User promoted to admin
+        recordAudit(AuditAction.USER_ROLE_CHANGE, EntityType.USER,
+                userId, user.getUsername(),
+                Role.STAFF, Role.ADMIN,
+                "Promoted to ADMIN by admin " + adminName,
+                true, null);
 
+        log.info("User {} promoted to ADMIN by admin {}", userId, adminId);
         return updatedUser;
+    }
+
+    // NEW: Demote user from ADMIN to STAFF (Admin only)
+    @Transactional
+    public User demoteToStaff(Long userId, Long adminId, String adminName) {
+        log.info("Admin {} demoting user {} from ADMIN to STAFF", adminId, userId);
+
+        User user = findActiveUserById(userId);
+
+        if (user.getRole() != Role.ADMIN) {
+            throw new BusinessException("User is not an ADMIN");
+        }
+
+        // Prevent self-demotion
+        if (user.getId().equals(adminId)) {
+            throw new BusinessException("You cannot demote yourself");
+        }
+
+        // Check if this is the last admin
+        long adminCount = userRepository.countByRoleAndIsDeletedFalse(Role.ADMIN);
+        if (adminCount <= 1) {
+            throw new BusinessException("Cannot demote the last ADMIN. There must be at least one ADMIN in the system.");
+        }
+
+        user.setRole(Role.STAFF);
+        user.setLastModifiedBy(adminId);
+        user.setLastModifiedByName(adminName);
+
+        User updatedUser = userRepository.save(user);
+
+        // AUDIT: User demoted from admin
+        recordAudit(AuditAction.USER_ROLE_CHANGE, EntityType.USER,
+                userId, user.getUsername(),
+                Role.ADMIN, Role.STAFF,
+                "Demoted to STAFF by admin " + adminName,
+                true, null);
+
+        log.info("User {} demoted to STAFF by admin {}", userId, adminId);
+        return updatedUser;
+    }
+
+    // NEW: Check if user is a lawyer in any case (for permission checks)
+    public boolean isUserLawyerInAnyCase(Long userId) {
+        // This would require a query to check if user has any case member record with LAWYER role
+        // Implementation depends on how you want to handle this
+        return false; // Placeholder - will be implemented with a repository method
     }
 
     @Transactional

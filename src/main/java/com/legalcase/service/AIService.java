@@ -44,8 +44,7 @@ public class AIService {
     private final NotificationService notificationService;
     private final WebClient webClient;
     private final ObjectMapper objectMapper;
-    private final AuditService auditService;  // ADDED
-
+    private final AuditService auditService;
 
     @Value("${gemini.api.key:}")
     private String geminiApiKey;
@@ -103,24 +102,21 @@ public class AIService {
         }
     }
 
+    // FIXED: verifyCaseAccess method
     private void verifyCaseAccess(LegalCase legalCase, User user) {
         boolean isAdmin = user.getRole() == Role.ADMIN;
-        boolean isLawyer = user.getRole() == Role.LAWYER;
 
         if (isAdmin) {
             return;
         }
 
+        // Check if user is a lawyer in the case
+        boolean isLawyer = caseMemberRepository.isLawyerInCase(legalCase.getId(), user.getId());
         if (isLawyer) {
-            // Lawyers can access cases they own or are assigned to
-            boolean isOwner = legalCase.getOwner().getId().equals(user.getId());
-            boolean isAssigned = caseMemberRepository.existsByLegalCaseAndUser(legalCase, user);
-            if (isOwner || isAssigned) {
-                return;
-            }
+            return;
         }
 
-        // Staff can only access cases they are members of
+        // Check if user is a member of the case
         boolean isMember = caseMemberRepository.existsByLegalCaseAndUser(legalCase, user);
         if (isMember) {
             return;
@@ -150,10 +146,20 @@ public class AIService {
             return;
         }
 
-        // Lawyers can access interactions related to their cases
-        if (user.getRole() == Role.LAWYER && interaction.getLegalCase() != null) {
-            verifyCaseAccess(interaction.getLegalCase(), user);
-            return;
+        // Check if user is a lawyer in the case related to this interaction
+        if (interaction.getLegalCase() != null) {
+            boolean isLawyer = caseMemberRepository.isLawyerInCase(interaction.getLegalCase().getId(), user.getId());
+            if (isLawyer) {
+                return;
+            }
+        }
+
+        // Check if user is a member of the case
+        if (interaction.getLegalCase() != null) {
+            boolean isMember = caseMemberRepository.existsByLegalCaseAndUser(interaction.getLegalCase(), user);
+            if (isMember) {
+                return;
+            }
         }
 
         throw new AccessDeniedException("You don't have access to this AI interaction");
@@ -745,6 +751,4 @@ public class AIService {
         User user = findUserByIdentifier(userIdentifier);
         return aiInteractionRepository.countByUserAndIsDeletedFalse(user);
     }
-
-
 }

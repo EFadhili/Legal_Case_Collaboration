@@ -12,6 +12,7 @@ import com.legalcase.enums.CaseMemberRole;
 import com.legalcase.enums.CasePriority;
 import com.legalcase.enums.CaseStatus;
 import com.legalcase.enums.CaseType;
+import com.legalcase.exception.InvalidStatusTransitionException;
 import com.legalcase.security.JwtUtils;
 import com.legalcase.service.CaseService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -72,6 +73,7 @@ public class CaseController {
 
         String userIdentifier = extractUserIdentifier(httpRequest);
         LegalCase legalCase = caseService.getCase(identifier, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
         List<MemberResponse> members = caseService.getCaseMembers(identifier, userIdentifier);
         CaseResponse response = buildCaseResponse(legalCase, members, userIdentifier);
 
@@ -83,12 +85,17 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> userCases = caseService.getMyCases(userIdentifier);
 
-        List<CaseResponse> ownedCases = userCases.stream()
+        // Filter out deleted cases
+        List<LegalCase> activeCases = userCases.stream()
+                .filter(c -> !c.isDeleted())
+                .collect(Collectors.toList());
+
+        List<CaseResponse> ownedCases = activeCases.stream()
                 .filter(c -> c.getOwner().getUsername().equals(userIdentifier) || c.getOwner().getEmail().equals(userIdentifier))
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
 
-        List<CaseResponse> memberCases = userCases.stream()
+        List<CaseResponse> memberCases = activeCases.stream()
                 .filter(c -> !c.getOwner().getUsername().equals(userIdentifier) && !c.getOwner().getEmail().equals(userIdentifier))
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
@@ -116,6 +123,7 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(request);
         List<LegalCase> cases = caseService.getLockedCases(userIdentifier);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> CaseResponse.fromEntity(c, List.of()))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -141,7 +149,7 @@ public class CaseController {
     }
 
     // ============================================
-    // UPDATE METHODS
+    // UPDATE METHODS (with deleted case check)
     // ============================================
 
     @PatchMapping("/{identifier}/status")
@@ -151,9 +159,12 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String userIdentifier = extractUserIdentifier(httpRequest);
-        LegalCase legalCase = caseService.updateStatus(identifier, request.getStatus(), userIdentifier);
+        LegalCase legalCase = caseService.getCase(identifier, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
+        LegalCase updatedCase = caseService.updateStatus(identifier, request.getStatus(), userIdentifier);
         List<MemberResponse> members = caseService.getCaseMembers(identifier, userIdentifier);
-        CaseResponse response = buildCaseResponse(legalCase, members, userIdentifier);
+        CaseResponse response = buildCaseResponse(updatedCase, members, userIdentifier);
         return ResponseEntity.ok(response);
     }
 
@@ -164,9 +175,12 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String userIdentifier = extractUserIdentifier(httpRequest);
-        LegalCase legalCase = caseService.updatePriority(identifier, priority, userIdentifier);
+        LegalCase legalCase = caseService.getCase(identifier, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
+        LegalCase updatedCase = caseService.updatePriority(identifier, priority, userIdentifier);
         List<MemberResponse> members = caseService.getCaseMembers(identifier, userIdentifier);
-        return ResponseEntity.ok(CaseResponse.fromEntity(legalCase, members));
+        return ResponseEntity.ok(CaseResponse.fromEntity(updatedCase, members));
     }
 
     @PatchMapping("/{identifier}/due-date")
@@ -176,9 +190,12 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String userIdentifier = extractUserIdentifier(httpRequest);
-        LegalCase legalCase = caseService.updateDueDate(identifier, LocalDate.parse(dueDate), userIdentifier);
+        LegalCase legalCase = caseService.getCase(identifier, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
+        LegalCase updatedCase = caseService.updateDueDate(identifier, LocalDate.parse(dueDate), userIdentifier);
         List<MemberResponse> members = caseService.getCaseMembers(identifier, userIdentifier);
-        return ResponseEntity.ok(CaseResponse.fromEntity(legalCase, members));
+        return ResponseEntity.ok(CaseResponse.fromEntity(updatedCase, members));
     }
 
     @PatchMapping("/{identifier}/lock")
@@ -188,13 +205,16 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String userIdentifier = extractUserIdentifier(httpRequest);
-        LegalCase legalCase = caseService.setLocked(identifier, locked, userIdentifier);
+        LegalCase legalCase = caseService.getCase(identifier, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
+        LegalCase updatedCase = caseService.setLocked(identifier, locked, userIdentifier);
         List<MemberResponse> members = caseService.getCaseMembers(identifier, userIdentifier);
-        return ResponseEntity.ok(CaseResponse.fromEntity(legalCase, members));
+        return ResponseEntity.ok(CaseResponse.fromEntity(updatedCase, members));
     }
 
     // ============================================
-    // MEMBER MANAGEMENT
+    // MEMBER MANAGEMENT (with deleted case check)
     // ============================================
 
     @PostMapping("/{identifier}/members")
@@ -204,8 +224,11 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String requesterIdentifier = extractUserIdentifier(httpRequest);
+        LegalCase legalCase = caseService.getCase(identifier, requesterIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
         CaseMember member = caseService.addMemberToCaseByIdentifier(
-                identifier, request.getIdentifier(), request.getRole(), requesterIdentifier);
+                identifier, request.getIdentifier(), CaseMemberRole.STAFF, requesterIdentifier);
         return ResponseEntity.status(HttpStatus.CREATED).body(MemberResponse.fromEntity(member));
     }
 
@@ -216,10 +239,41 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String requesterIdentifier = extractUserIdentifier(httpRequest);
+        LegalCase legalCase = caseService.getCase(identifier, requesterIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
         List<CaseMember> members = caseService.addMembersToCaseByIdentifiers(
-                identifier, request.getIdentifiers(), request.getRole(), requesterIdentifier);
+                identifier, request.getIdentifiers(), requesterIdentifier);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(members.stream().map(MemberResponse::fromEntity).collect(Collectors.toList()));
+    }
+
+    @PatchMapping("/{identifier}/members/{userIdentifier}/promote")
+    public ResponseEntity<MemberResponse> promoteMemberToLawyer(
+            @Parameter(description = "Case ID or Case Number") @PathVariable String identifier,
+            @Parameter(description = "User identifier to promote") @PathVariable String userIdentifier,
+            HttpServletRequest httpRequest) {
+
+        String requesterIdentifier = extractUserIdentifier(httpRequest);
+        LegalCase legalCase = caseService.getCase(identifier, requesterIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
+        CaseMember caseMember = caseService.promoteMemberToLawyer(identifier, userIdentifier, requesterIdentifier);
+        return ResponseEntity.ok(MemberResponse.fromEntity(caseMember));
+    }
+
+    @PatchMapping("/{identifier}/members/{userIdentifier}/demote")
+    public ResponseEntity<MemberResponse> demoteLawyerToStaff(
+            @Parameter(description = "Case ID or Case Number") @PathVariable String identifier,
+            @Parameter(description = "User identifier to demote") @PathVariable String userIdentifier,
+            HttpServletRequest httpRequest) {
+
+        String requesterIdentifier = extractUserIdentifier(httpRequest);
+        LegalCase legalCase = caseService.getCase(identifier, requesterIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
+        CaseMember caseMember = caseService.demoteLawyerToStaff(identifier, userIdentifier, requesterIdentifier);
+        return ResponseEntity.ok(MemberResponse.fromEntity(caseMember));
     }
 
     @GetMapping("/{identifier}/members")
@@ -228,6 +282,9 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String userIdentifier = extractUserIdentifier(httpRequest);
+        LegalCase legalCase = caseService.getCase(identifier, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
         return ResponseEntity.ok(caseService.getCaseMembers(identifier, userIdentifier));
     }
 
@@ -238,6 +295,9 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String requesterIdentifier = extractUserIdentifier(httpRequest);
+        LegalCase legalCase = caseService.getCase(identifier, requesterIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
         caseService.removeMemberFromCase(identifier, userIdentifierToRemove, requesterIdentifier);
         return ResponseEntity.noContent().build();
     }
@@ -252,6 +312,9 @@ public class CaseController {
             HttpServletRequest httpRequest) {
 
         String userIdentifier = extractUserIdentifier(httpRequest);
+        LegalCase legalCase = caseService.getCase(identifier, userIdentifier);
+        verifyCaseNotDeleted(legalCase);
+
         Map<String, Object> progress = new HashMap<>();
         progress.put("progressPercentage", caseService.getCaseProgressPercentage(identifier, userIdentifier));
         progress.put("readyForInProgress", caseService.isReadyForInProgress(identifier, userIdentifier));
@@ -271,6 +334,7 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.searchUserCases(q, userIdentifier);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -284,6 +348,7 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.getCasesByStatus(status, userIdentifier);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -297,6 +362,7 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.getCasesByPriority(priority, userIdentifier);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -310,6 +376,7 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.getCasesByType(type, userIdentifier);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -323,6 +390,7 @@ public class CaseController {
         String requesterIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.getCasesByAssignedUser(targetUserIdentifier, requesterIdentifier);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), requesterIdentifier), requesterIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -336,6 +404,7 @@ public class CaseController {
         String requesterIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.getCasesByCreator(creatorIdentifier, requesterIdentifier);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), requesterIdentifier), requesterIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -349,6 +418,7 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.getCasesDueBefore(userIdentifier, date);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -362,6 +432,7 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.getCasesDueAfter(userIdentifier, date);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -376,6 +447,7 @@ public class CaseController {
         String userIdentifier = extractUserIdentifier(httpRequest);
         List<LegalCase> cases = caseService.getCasesDueBetween(userIdentifier, start, end);
         List<CaseResponse> responses = cases.stream()
+                .filter(c -> !c.isDeleted())
                 .map(c -> buildCaseResponse(c, caseService.getCaseMembers(c.getCaseNumber(), userIdentifier), userIdentifier))
                 .collect(Collectors.toList());
         return ResponseEntity.ok(responses);
@@ -430,7 +502,6 @@ public class CaseController {
     private String extractUserIdentifier(HttpServletRequest request) {
         String token = extractToken(request);
         String email = jwtUtils.getEmailFromToken(token);
-        // Return email as the identifier (could also return username)
         return email;
     }
 
@@ -440,5 +511,11 @@ public class CaseController {
             throw new RuntimeException("Missing or invalid Authorization header");
         }
         return authHeader.substring(7);
+    }
+
+    private void verifyCaseNotDeleted(LegalCase legalCase) {
+        if (legalCase.isDeleted()) {
+            throw new InvalidStatusTransitionException("Cannot perform actions on a deleted case");
+        }
     }
 }
